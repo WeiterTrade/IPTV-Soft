@@ -1,0 +1,179 @@
+name: Сборка
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  LAZARUS_VERSION: "3.6"
+  VLC_LEGACY: "2.2.8"     # последняя версия VLC для Windows XP / Vista
+  VLC_MODERN: "3.0.21"    # для Windows 7 и новее
+
+jobs:
+  # ---------------------------------------------------------------- Windows
+  windows:
+    name: Windows (${{ matrix.flavor }})
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavor: xp
+            title: "Windows XP / Vista"
+            vlc: "2.2.8"
+          - flavor: win7plus
+            title: "Windows 7 / 8 / 10 / 11"
+            vlc: "3.0.21"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Версия
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then V="${GITHUB_REF_NAME#v}"; else V="1.0.${GITHUB_RUN_NUMBER}"; fi
+          echo "VERSION=$V" >> "$GITHUB_ENV"
+
+      - name: Кэш установщика Lazarus
+        uses: actions/cache@v4
+        with:
+          path: laz-installer
+          key: lazarus-win32-${{ env.LAZARUS_VERSION }}
+
+      - name: Установка Lazarus (32-бит, совместим с XP)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force laz-installer | Out-Null
+          $exe = "laz-installer\lazarus-win32.exe"
+          if (-not (Test-Path $exe)) {
+            $v = $env:LAZARUS_VERSION
+            $url = "https://downloads.sourceforge.net/project/lazarus/Lazarus%20Windows%2032%20bits/Lazarus%20$v/lazarus-$v-fpc-3.2.2-win32.exe"
+            curl.exe -L --fail --retry 5 --retry-delay 10 -o $exe $url
+          }
+          Start-Process -FilePath $exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/DIR=C:\lazarus' -Wait
+          if (-not (Test-Path C:\lazarus\lazbuild.exe)) { throw "Lazarus не установился" }
+
+      - name: Компиляция
+        shell: pwsh
+        run: |
+          C:\lazarus\lazbuild.exe --build-mode=Default src\iptvaristocrat.lpi
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path build\iptv-aristocrat.exe)) { throw "iptv-aristocrat.exe не собран" }
+
+      - name: Скачивание VLC ${{ matrix.vlc }}
+        shell: bash
+        run: |
+          curl -L --fail --retry 5 --retry-delay 10 -o vlc.7z \
+            "https://download.videolan.org/pub/videolan/vlc/${{ matrix.vlc }}/win32/vlc-${{ matrix.vlc }}-win32.7z"
+          7z x -y vlc.7z -ovlc > /dev/null
+
+      - name: Сборка папки программы
+        shell: bash
+        run: |
+          D="dist/IPTV Aristocrat"
+          mkdir -p "$D"
+          cp build/iptv-aristocrat.exe "$D/"
+          V="vlc/vlc-${{ matrix.vlc }}"
+          cp "$V/libvlc.dll" "$V/libvlccore.dll" "$D/"
+          cp -r "$V/plugins" "$D/"
+          rm -rf "$D/plugins/gui" "$D/plugins/visualization" "$D/plugins/video_splitter"
+          # кэш плагинов VLC после удаления лишнего устарел — VLC пересоздаст его сам
+          rm -f "$D/plugins/plugins.dat"
+          cp LICENSE "$D/LICENSE.txt"
+          printf 'IPTV Aristocrat %s — %s\r\n\r\nЗапустите iptv-aristocrat.exe.\r\nЧтобы хранить настройки рядом с программой (на флешке),\r\nсоздайте в этой папке пустой файл portable.txt\r\n' \
+            "$VERSION" "${{ matrix.title }}" > "$D/README.txt"
+          cd dist && 7z a -tzip "../IPTV-Aristocrat-${VERSION}-windows-${{ matrix.flavor }}.zip" "IPTV Aristocrat" > /dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.flavor }}
+          path: IPTV-Aristocrat-*.zip
+
+  # ---------------------------------------------------------------- Linux
+  linux:
+    name: Linux (deb, rpm, AppImage)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Версия
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then V="${GITHUB_REF_NAME#v}"; else V="1.0.${GITHUB_RUN_NUMBER}"; fi
+          echo "VERSION=$V" >> "$GITHUB_ENV"
+
+      - name: Установка Lazarus, GTK2, VLC
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lazarus lcl-gtk2 libgtk2.0-dev libx11-dev \
+            libvlc-dev libvlc5 libvlccore9 vlc-plugin-base vlc-plugin-video-output \
+            file desktop-file-utils
+          echo 'deb [trusted=yes] https://repo.goreleaser.com/apt/ /' | sudo tee /etc/apt/sources.list.d/goreleaser.list
+          sudo apt-get update
+          sudo apt-get install -y nfpm
+
+      - name: Компиляция
+        run: |
+          lazbuild --ws=gtk2 --build-mode=Default src/iptvaristocrat.lpi
+          test -x build/iptv-aristocrat
+          file build/iptv-aristocrat
+
+      - name: Пакеты deb и rpm
+        run: |
+          mkdir -p out
+          nfpm package -f packaging/linux/nfpm.yaml -p deb -t out/
+          nfpm package -f packaging/linux/nfpm.yaml -p rpm -t out/
+          ls -la out
+
+      - name: AppImage (VLC внутри)
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          curl -L --fail --retry 5 -o linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy
+          LIB=/usr/lib/x86_64-linux-gnu
+          mkdir -p AppDir/usr/lib/vlc
+          cp -a "$LIB/vlc/plugins" AppDir/usr/lib/vlc/
+          rm -rf AppDir/usr/lib/vlc/plugins/gui AppDir/usr/lib/vlc/plugins/visualization \
+                 AppDir/usr/lib/vlc/plugins/video_splitter AppDir/usr/lib/vlc/plugins/plugins.dat
+          ARGS=()
+          while IFS= read -r f; do ARGS+=(--deploy-deps-only "$f"); done < <(find AppDir/usr/lib/vlc/plugins -name '*.so')
+          ./linuxdeploy --appdir AppDir \
+            -e build/iptv-aristocrat \
+            -d packaging/linux/iptv-aristocrat.desktop \
+            -i packaging/linux/iptv-aristocrat.png \
+            --library "$LIB/libvlc.so.5" \
+            --library "$LIB/libvlccore.so.9" \
+            "${ARGS[@]}" \
+            --custom-apprun packaging/linux/AppRun
+          # кэш плагинов, чтобы VLC быстро стартовал
+          if [ -x "$LIB/vlc/vlc-cache-gen" ]; then
+            LD_LIBRARY_PATH=AppDir/usr/lib "$LIB/vlc/vlc-cache-gen" AppDir/usr/lib/vlc/plugins || true
+          fi
+          LDAI_OUTPUT="out/IPTV-Aristocrat-${VERSION}-x86_64.AppImage" ./linuxdeploy --appdir AppDir --output appimage
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: out/*
+
+  # ---------------------------------------------------------------- Релиз
+  release:
+    name: Публикация релиза
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [ windows, linux ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
