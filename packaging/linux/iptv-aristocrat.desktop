@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=IPTV Aristocrat
+GenericName=IPTV Player
+GenericName[ru]=IPTV-плеер
+Comment=Watch IPTV channels from M3U playlists
+Comment[ru]=Просмотр IPTV-каналов из плейлистов M3U
+Exec=iptv-aristocrat
+Icon=iptv-aristocrat
+Terminal=false
+Categories=AudioVideo;Video;Player;TV;
+Keywords=iptv;tv;m3u;epg;

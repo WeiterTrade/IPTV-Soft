@@ -1,0 +1,449 @@
+{ Настройки IPTV Aristocrat: плейлисты, источники телепрограмм, избранное,
+  вид, плеер, запись. Хранятся в одном INI-файле; этот же формат
+  используется для экспорта и импорта конфигурации. }
+unit appsettings;
+
+{$mode objfpc}{$H+}
+
+interface
+
+uses
+  Classes, SysUtils, contnrs, IniFiles;
+
+const
+  CONFIG_SIGNATURE = 'IPTV Aristocrat configuration';
+
+type
+  TPlaylistEntry = class
+  public
+    Name, Source, Epg: string;
+  end;
+
+  TAppSettings = class
+  private
+    FPlaylists: TFPObjectList;
+    FFavorites: TStringList;
+    FRecent: TStringList;
+    FEpgSources: TStringList;
+    procedure ReadAll(Ini: TCustomIniFile; WithWindow: Boolean);
+    procedure WriteAll(Ini: TCustomIniFile; WithWindow: Boolean);
+    procedure ReadList(Ini: TCustomIniFile; const Sec: string; L: TStrings);
+    procedure WriteList(Ini: TCustomIniFile; const Sec: string; L: TStrings);
+  public
+    { общее }
+    Volume: Integer;
+    Muted: Boolean;
+    LastPlaylist: Integer;
+    LastUrl: string;
+    LastTab: Integer;
+    { вид }
+    ViewMode: Integer;           { 0 список, 1 компактный, 2 сетка, 3 плитка }
+    ShowNumbers: Boolean;
+    ShowLogos: Boolean;
+    Accent: Integer;
+    OpenMaximized: Boolean;
+    SystemFrame: Boolean;
+    AutoPlayLast: Boolean;
+    { плеер }
+    UseExternalPlayer: Boolean;
+    ExternalPlayer: string;
+    ExternalArgs: string;
+    NetworkCaching: Integer;
+    { запись }
+    RecordDir: string;
+    { телепрограмма }
+    UsePlaylistEpg: Boolean;
+    { окно }
+    SideWidth: Integer;
+    WinLeft, WinTop, WinWidth, WinHeight: Integer;
+    WinMaximized: Boolean;
+    { пути }
+    AppDir, ConfigDir, CacheDir: string;
+
+    constructor Create;
+    destructor Destroy; override;
+    procedure Load;
+    procedure Save;
+    function ExportTo(const FileName: string; out ErrorMsg: string): Boolean;
+    function ImportFrom(const FileName: string; out ErrorMsg: string): Boolean;
+
+    function PlaylistCount: Integer;
+    function Playlist(Index: Integer): TPlaylistEntry;
+    function AddPlaylist(const AName, ASource, AEpg: string): Integer;
+    procedure DeletePlaylist(Index: Integer);
+    function IsFavorite(const Url: string): Boolean;
+    procedure ToggleFavorite(const Url: string);
+    procedure PushRecent(const Url: string);
+    property Recent: TStringList read FRecent;
+    property Favorites: TStringList read FFavorites;
+    property EpgSources: TStringList read FEpgSources;
+  end;
+
+function HashStr(const S: string): string;
+function DefaultRecordDir: string;
+
+implementation
+
+uses
+  Forms;
+
+const
+  MAX_RECENT = 40;
+
+{$PUSH}{$R-}{$Q-}
+function HashStr(const S: string): string;
+var
+  h: LongWord;
+  i: Integer;
+begin
+  h := 2166136261;
+  for i := 1 to Length(S) do
+    h := LongWord((h xor Ord(S[i])) * 16777619);
+  Result := IntToHex(h, 8);
+end;
+{$POP}
+
+function DefaultRecordDir: string;
+var
+  Home: string;
+begin
+  Home := IncludeTrailingPathDelimiter(GetUserDir);
+  if DirectoryExists(Home + 'Videos') then
+    Result := Home + 'Videos' + PathDelim + 'IPTV Aristocrat'
+  else if DirectoryExists(Home + 'Видео') then
+    Result := Home + 'Видео' + PathDelim + 'IPTV Aristocrat'
+  else if DirectoryExists(Home + 'My Documents' + PathDelim + 'My Videos') then
+    Result := Home + 'My Documents' + PathDelim + 'My Videos' + PathDelim + 'IPTV Aristocrat'
+  else
+    Result := Home + 'IPTV Aristocrat Records';
+end;
+
+constructor TAppSettings.Create;
+begin
+  inherited Create;
+  FPlaylists := TFPObjectList.Create(True);
+  FFavorites := TStringList.Create;
+  FFavorites.Sorted := True;
+  FFavorites.Duplicates := dupIgnore;
+  FFavorites.CaseSensitive := True;
+  FRecent := TStringList.Create;
+  FEpgSources := TStringList.Create;
+
+  AppDir := ExtractFilePath(Application.ExeName);
+  { Переносной режим: файл portable.txt рядом с программой }
+  if FileExists(AppDir + 'portable.txt') then
+    ConfigDir := AppDir + 'data' + PathDelim
+  else
+    ConfigDir := IncludeTrailingPathDelimiter(GetAppConfigDir(False));
+  CacheDir := ConfigDir + 'cache' + PathDelim;
+  ForceDirectories(CacheDir);
+
+  Volume := 80;
+  LastTab := 1;
+  ViewMode := 0;
+  ShowNumbers := True;
+  ShowLogos := True;
+  OpenMaximized := True;
+  AutoPlayLast := True;
+  NetworkCaching := 1500;
+  RecordDir := DefaultRecordDir;
+  UsePlaylistEpg := True;
+  SideWidth := 360;
+  WinWidth := 1180;
+  WinHeight := 720;
+  WinLeft := -1;
+  WinTop := -1;
+end;
+
+destructor TAppSettings.Destroy;
+begin
+  FEpgSources.Free;
+  FRecent.Free;
+  FFavorites.Free;
+  FPlaylists.Free;
+  inherited Destroy;
+end;
+
+procedure TAppSettings.ReadList(Ini: TCustomIniFile; const Sec: string; L: TStrings);
+var
+  i, n: Integer;
+  S: string;
+begin
+  L.Clear;
+  n := Ini.ReadInteger(Sec, 'Count', 0);
+  for i := 1 to n do
+  begin
+    S := Ini.ReadString(Sec, 'Item' + IntToStr(i), '');
+    if S <> '' then L.Add(S);
+  end;
+end;
+
+procedure TAppSettings.WriteList(Ini: TCustomIniFile; const Sec: string; L: TStrings);
+var
+  i: Integer;
+begin
+  Ini.EraseSection(Sec);
+  Ini.WriteInteger(Sec, 'Count', L.Count);
+  for i := 0 to L.Count - 1 do
+    Ini.WriteString(Sec, 'Item' + IntToStr(i + 1), L[i]);
+end;
+
+procedure TAppSettings.ReadAll(Ini: TCustomIniFile; WithWindow: Boolean);
+var
+  i, n: Integer;
+  Sec: string;
+begin
+  Volume := Ini.ReadInteger('General', 'Volume', Volume);
+  Muted := Ini.ReadBool('General', 'Muted', Muted);
+  LastPlaylist := Ini.ReadInteger('General', 'LastPlaylist', 0);
+  LastUrl := Ini.ReadString('General', 'LastUrl', '');
+  LastTab := Ini.ReadInteger('General', 'LastTab', LastTab);
+
+  ViewMode := Ini.ReadInteger('View', 'Mode', ViewMode);
+  ShowNumbers := Ini.ReadBool('View', 'ShowNumbers', ShowNumbers);
+  ShowLogos := Ini.ReadBool('View', 'ShowLogos', ShowLogos);
+  Accent := Ini.ReadInteger('View', 'Accent', Accent);
+  OpenMaximized := Ini.ReadBool('View', 'OpenMaximized', OpenMaximized);
+  SystemFrame := Ini.ReadBool('View', 'SystemFrame', SystemFrame);
+  AutoPlayLast := Ini.ReadBool('View', 'AutoPlayLast', AutoPlayLast);
+
+  UseExternalPlayer := Ini.ReadBool('Player', 'UseExternal', UseExternalPlayer);
+  ExternalPlayer := Ini.ReadString('Player', 'ExternalPath', ExternalPlayer);
+  ExternalArgs := Ini.ReadString('Player', 'ExternalArgs', ExternalArgs);
+  NetworkCaching := Ini.ReadInteger('Player', 'NetworkCaching', NetworkCaching);
+
+  RecordDir := Ini.ReadString('Record', 'Folder', RecordDir);
+  UsePlaylistEpg := Ini.ReadBool('Epg', 'UsePlaylistEpg', UsePlaylistEpg);
+
+  if WithWindow then
+  begin
+    SideWidth := Ini.ReadInteger('Window', 'SideWidth', SideWidth);
+    WinLeft := Ini.ReadInteger('Window', 'Left', WinLeft);
+    WinTop := Ini.ReadInteger('Window', 'Top', WinTop);
+    WinWidth := Ini.ReadInteger('Window', 'Width', WinWidth);
+    WinHeight := Ini.ReadInteger('Window', 'Height', WinHeight);
+    WinMaximized := Ini.ReadBool('Window', 'Maximized', WinMaximized);
+  end;
+
+  FPlaylists.Clear;
+  n := Ini.ReadInteger('Playlists', 'Count', 0);
+  for i := 1 to n do
+  begin
+    Sec := 'Playlist' + IntToStr(i);
+    AddPlaylist(Ini.ReadString(Sec, 'Name', 'Плейлист ' + IntToStr(i)),
+                Ini.ReadString(Sec, 'Source', ''),
+                Ini.ReadString(Sec, 'Epg', ''));
+  end;
+  ReadList(Ini, 'EpgSources', FEpgSources);
+  ReadList(Ini, 'Favorites', FFavorites);
+  ReadList(Ini, 'Recent', FRecent);
+
+  if Volume < 0 then Volume := 0;
+  if Volume > 100 then Volume := 100;
+  if (ViewMode < 0) or (ViewMode > 3) then ViewMode := 0;
+  if (LastTab < 0) or (LastTab > 2) then LastTab := 1;
+  if NetworkCaching < 100 then NetworkCaching := 100;
+  if NetworkCaching > 60000 then NetworkCaching := 60000;
+  if RecordDir = '' then RecordDir := DefaultRecordDir;
+end;
+
+procedure TAppSettings.WriteAll(Ini: TCustomIniFile; WithWindow: Boolean);
+var
+  i: Integer;
+  Sec: string;
+begin
+  Ini.WriteString('About', 'Format', CONFIG_SIGNATURE);
+  Ini.WriteInteger('About', 'Version', 1);
+
+  Ini.WriteInteger('General', 'Volume', Volume);
+  Ini.WriteBool('General', 'Muted', Muted);
+  Ini.WriteInteger('General', 'LastPlaylist', LastPlaylist);
+  Ini.WriteString('General', 'LastUrl', LastUrl);
+  Ini.WriteInteger('General', 'LastTab', LastTab);
+
+  Ini.WriteInteger('View', 'Mode', ViewMode);
+  Ini.WriteBool('View', 'ShowNumbers', ShowNumbers);
+  Ini.WriteBool('View', 'ShowLogos', ShowLogos);
+  Ini.WriteInteger('View', 'Accent', Accent);
+  Ini.WriteBool('View', 'OpenMaximized', OpenMaximized);
+  Ini.WriteBool('View', 'SystemFrame', SystemFrame);
+  Ini.WriteBool('View', 'AutoPlayLast', AutoPlayLast);
+
+  Ini.WriteBool('Player', 'UseExternal', UseExternalPlayer);
+  Ini.WriteString('Player', 'ExternalPath', ExternalPlayer);
+  Ini.WriteString('Player', 'ExternalArgs', ExternalArgs);
+  Ini.WriteInteger('Player', 'NetworkCaching', NetworkCaching);
+
+  Ini.WriteString('Record', 'Folder', RecordDir);
+  Ini.WriteBool('Epg', 'UsePlaylistEpg', UsePlaylistEpg);
+
+  if WithWindow then
+  begin
+    Ini.WriteInteger('Window', 'SideWidth', SideWidth);
+    Ini.WriteInteger('Window', 'Left', WinLeft);
+    Ini.WriteInteger('Window', 'Top', WinTop);
+    Ini.WriteInteger('Window', 'Width', WinWidth);
+    Ini.WriteInteger('Window', 'Height', WinHeight);
+    Ini.WriteBool('Window', 'Maximized', WinMaximized);
+  end;
+
+  i := 1;
+  while Ini.SectionExists('Playlist' + IntToStr(i)) do
+  begin
+    Ini.EraseSection('Playlist' + IntToStr(i));
+    Inc(i);
+  end;
+  Ini.WriteInteger('Playlists', 'Count', FPlaylists.Count);
+  for i := 0 to FPlaylists.Count - 1 do
+  begin
+    Sec := 'Playlist' + IntToStr(i + 1);
+    Ini.WriteString(Sec, 'Name', Playlist(i).Name);
+    Ini.WriteString(Sec, 'Source', Playlist(i).Source);
+    Ini.WriteString(Sec, 'Epg', Playlist(i).Epg);
+  end;
+  WriteList(Ini, 'EpgSources', FEpgSources);
+  WriteList(Ini, 'Favorites', FFavorites);
+  WriteList(Ini, 'Recent', FRecent);
+end;
+
+procedure TAppSettings.Load;
+var
+  Ini: TIniFile;
+begin
+  if not FileExists(ConfigDir + 'aristocrat.ini') then Exit;
+  try
+    Ini := TIniFile.Create(ConfigDir + 'aristocrat.ini');
+    try
+      ReadAll(Ini, True);
+    finally
+      Ini.Free;
+    end;
+  except
+    { повреждённый файл настроек — работаем с настройками по умолчанию }
+  end;
+end;
+
+procedure TAppSettings.Save;
+var
+  Ini: TIniFile;
+begin
+  try
+    ForceDirectories(ConfigDir);
+    Ini := TIniFile.Create(ConfigDir + 'aristocrat.ini');
+    try
+      Ini.CacheUpdates := True;
+      WriteAll(Ini, True);
+      Ini.UpdateFile;
+    finally
+      Ini.Free;
+    end;
+  except
+    { не удалось сохранить — не критично }
+  end;
+end;
+
+function TAppSettings.ExportTo(const FileName: string; out ErrorMsg: string): Boolean;
+var
+  Ini: TIniFile;
+begin
+  Result := False;
+  ErrorMsg := '';
+  try
+    if FileExists(FileName) then DeleteFile(FileName);
+    Ini := TIniFile.Create(FileName);
+    try
+      Ini.CacheUpdates := True;
+      WriteAll(Ini, False);
+      Ini.UpdateFile;
+    finally
+      Ini.Free;
+    end;
+    Result := True;
+  except
+    on E: Exception do ErrorMsg := E.Message;
+  end;
+end;
+
+function TAppSettings.ImportFrom(const FileName: string; out ErrorMsg: string): Boolean;
+var
+  Ini: TIniFile;
+begin
+  Result := False;
+  ErrorMsg := '';
+  try
+    Ini := TIniFile.Create(FileName);
+    try
+      if Ini.ReadString('About', 'Format', '') <> CONFIG_SIGNATURE then
+      begin
+        ErrorMsg := 'это не файл конфигурации IPTV Aristocrat';
+        Exit;
+      end;
+      ReadAll(Ini, False);
+    finally
+      Ini.Free;
+    end;
+    Save;
+    Result := True;
+  except
+    on E: Exception do ErrorMsg := E.Message;
+  end;
+end;
+
+function TAppSettings.PlaylistCount: Integer;
+begin
+  Result := FPlaylists.Count;
+end;
+
+function TAppSettings.Playlist(Index: Integer): TPlaylistEntry;
+begin
+  Result := TPlaylistEntry(FPlaylists[Index]);
+end;
+
+function TAppSettings.AddPlaylist(const AName, ASource, AEpg: string): Integer;
+var
+  E: TPlaylistEntry;
+begin
+  E := TPlaylistEntry.Create;
+  E.Name := AName;
+  E.Source := ASource;
+  E.Epg := AEpg;
+  Result := FPlaylists.Add(E);
+end;
+
+procedure TAppSettings.DeletePlaylist(Index: Integer);
+begin
+  if (Index >= 0) and (Index < FPlaylists.Count) then
+    FPlaylists.Delete(Index);
+end;
+
+function TAppSettings.IsFavorite(const Url: string): Boolean;
+var
+  i: Integer;
+begin
+  Result := FFavorites.Find(Url, i);
+end;
+
+procedure TAppSettings.ToggleFavorite(const Url: string);
+var
+  i: Integer;
+begin
+  if Url = '' then Exit;
+  if FFavorites.Find(Url, i) then
+    FFavorites.Delete(i)
+  else
+    FFavorites.Add(Url);
+end;
+
+procedure TAppSettings.PushRecent(const Url: string);
+var
+  i: Integer;
+begin
+  if Url = '' then Exit;
+  i := FRecent.IndexOf(Url);
+  if i >= 0 then FRecent.Delete(i);
+  FRecent.Insert(0, Url);
+  while FRecent.Count > MAX_RECENT do
+    FRecent.Delete(FRecent.Count - 1);
+end;
+
+end.

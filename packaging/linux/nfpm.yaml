@@ -1,0 +1,34 @@
+name: iptv-aristocrat
+arch: amd64
+platform: linux
+version: ${VERSION}
+section: video
+priority: optional
+maintainer: IPTV Aristocrat <iptv-aristocrat@users.noreply.github.com>
+description: |
+  IPTV Aristocrat — IPTV-плеер.
+  Плейлисты M3U, группы, поиск, избранное, телепрограмма XMLTV.
+  Воспроизведение через libVLC.
+homepage: https://github.com/
+license: MIT
+contents:
+  - src: build/iptv-aristocrat
+    dst: /usr/bin/iptv-aristocrat
+    file_info:
+      mode: 0755
+  - src: packaging/linux/iptv-aristocrat.desktop
+    dst: /usr/share/applications/iptv-aristocrat.desktop
+  - src: packaging/linux/iptv-aristocrat.png
+    dst: /usr/share/icons/hicolor/256x256/apps/iptv-aristocrat.png
+overrides:
+  deb:
+    depends:
+      - libgtk2.0-0
+      - libvlc5
+      - vlc-plugin-base
+      - curl
+  rpm:
+    depends:
+      - "libgtk-x11-2.0.so.0()(64bit)"
+      - "libvlc.so.5()(64bit)"
+      - curl
