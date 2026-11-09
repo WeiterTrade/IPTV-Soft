@@ -1382,14 +1382,14 @@ end;
 
 procedure TMainForm.OpenCategory(Index: Integer);
 var
-  Name: string;
+  CatName: string;
 begin
-  Name := chView.SelectedCategory;
+  CatName := chView.SelectedCategory;
   if (Index >= 0) and chView.CatMode then
   begin
     FInCategory := True;
-    FCategory := Name;
-    FCategoryNone := Name = NO_CATEGORY;
+    FCategory := CatName;
+    FCategoryNone := CatName = NO_CATEGORY;
     FUpdating := True;
     edSearch.Text := '';
     FUpdating := False;
