@@ -18,6 +18,6 @@ begin
   Application.Title := 'IPTV Aristocrat';
   Application.Scaled := True;
   Application.Initialize;
-  Application.CreateForm(TMainForm, MainForm);
+  Application.CreateForm(TMainForm, AppMainForm);
   Application.Run;
 end.

@@ -67,6 +67,10 @@ type
     property OnClick;
     property OnDblClick;
     property Caption;
+    property Align;
+    property BorderSpacing;
+    property Hint;
+    property ShowHint;
   end;
 
   TFlatSlider = class(TGraphicControl)
@@ -87,6 +91,10 @@ type
     property Position: Integer read FPosition write SetPosition;
     property Max: Integer read FMax write FMax;
     property OnChange: TNotifyEvent read FOnChange write FOnChange;
+    property Align;
+    property BorderSpacing;
+    property Hint;
+    property ShowHint;
   end;
 
   { Переключатель-плашки: «Избранное | Все каналы | Категории» }
@@ -108,6 +116,8 @@ type
     property Items: TStringList read FItems;
     property ItemIndex: Integer read FItemIndex write SetItemIndex;
     property OnChange: TNotifyEvent read FOnChange write FOnChange;
+    property Align;
+    property BorderSpacing;
   end;
 
 procedure DrawIcon(C: TCanvas; Kind: TIconKind; const R: TRect; Col: TColor; Filled: Boolean);
@@ -442,6 +452,7 @@ constructor TFlatSlider.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
   ParentColor := True;
+  ShowHint := True;
   FMax := 100;
   FPosition := 80;
   Width := 110;

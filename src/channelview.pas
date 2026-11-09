@@ -85,6 +85,8 @@ type
     property OnItemActivate: TItemEvent read FOnItemActivate write FOnItemActivate;
     property OnSelectionMoved: TItemEvent read FOnSelectionMoved write FOnSelectionMoved;
     property PopupMenu;
+    property Align;
+    property BorderSpacing;
   end;
 
 function Ellipsize(C: TCanvas; const S: string; MaxW: Integer): string;

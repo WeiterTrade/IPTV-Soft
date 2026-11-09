@@ -180,7 +180,7 @@ type
   end;
 
 var
-  MainForm: TMainForm;
+  AppMainForm: TMainForm;
 
 implementation
 
@@ -735,7 +735,6 @@ begin
   sldVolume.Position := FSettings.Volume;
   sldVolume.OnChange := @VolumeChange;
   sldVolume.Hint := 'Громкость';
-  sldVolume.ShowHint := True;
   btnMute := MakeButton(pnlControls, ikVolume, alRight, 'Выключить звук (M)', @MuteClick);
   btnMute.Left := 2800;
   if FSettings.Muted then btnMute.Kind := ikMute;
