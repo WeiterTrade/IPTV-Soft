@@ -9,7 +9,7 @@ uses
   Classes, SysUtils, Types, Forms, Controls, Graphics, StdCtrls, ExtCtrls,
   Menus, Dialogs, LCLType, Clipbrd, Math, LazUTF8, FileUtil, Process,
   m3u, epg, vlcdyn, netload, appsettings, widgets, playlistdlg, videohost,
-  channelview, logos, winframe, settingsdlg;
+  channelview, logos, winframe, settingsdlg, applog;
 
 type
   TLoadKind = (lkPlaylist, lkEpg);
@@ -410,14 +410,29 @@ begin
   Constraints.MinWidth := 760;
   Constraints.MinHeight := 460;
 
+  Log('настройки: ' + FSettings.ConfigDir);
   FLogos := TLogoCache.Create(FSettings.CacheDir);
   FLogos.OnLoaded := @LogosLoaded;
 
+  Log('построение интерфейса');
   BuildFrame;
   BuildUI;
   ApplyViewSettings;
-  InitVlc;
+  Log('запуск видеодвижка');
+  try
+    InitVlc;
+  except
+    on E: Exception do
+    begin
+      FVlcError := 'Ошибка запуска видеодвижка: ' + E.Message;
+      Log(FVlcError);
+      FPlayer := nil;
+      FVlc := nil;
+      pnlVideo.Caption := FVlcError;
+    end;
+  end;
   UpdateTransport;
+  Log('окно готово');
 end;
 
 destructor TMainForm.Destroy;
@@ -775,11 +790,20 @@ procedure TMainForm.InitVlc;
 var
   Args: array[0..2] of PAnsiChar;
 begin
-  if not LoadVlc(FSettings.AppDir, FVlcError) then
+  if FindCmdLineSwitch('novideo', ['-', '/'], True) then
   begin
+    FVlcError := 'Видео отключено параметром --novideo';
     pnlVideo.Caption := FVlcError;
     Exit;
   end;
+  if not LoadVlc(FSettings.AppDir, FVlcError) then
+  begin
+    Log('VLC не загружен: ' + FVlcError);
+    pnlVideo.Caption := FVlcError;
+    Exit;
+  end;
+  Log('libVLC загружен, версия ' + VlcVersion);
+  MaskFloatExceptions;
   Args[0] := '--no-video-title-show';
   Args[1] := '--network-caching=1500';
   Args[2] := '--quiet';
@@ -790,6 +814,7 @@ begin
     pnlVideo.Caption := FVlcError;
     Exit;
   end;
+  Log('libvlc_new выполнен');
   FPlayer := libvlc_media_player_new(FVlc);
   if FPlayer = nil then
   begin
@@ -1695,6 +1720,7 @@ procedure TMainForm.FormShow(Sender: TObject);
 begin
   if FShown then Exit;
   FShown := True;
+  Log('показ окна');
   if not FSystemFrame then PrepareBorderless(Self);
   if FSettings.OpenMaximized or FSettings.WinMaximized then
     SetMaximized(True)
