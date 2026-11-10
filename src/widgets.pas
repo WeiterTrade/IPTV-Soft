@@ -41,7 +41,7 @@ type
   TIconKind = (ikNone, ikPlay, ikStop, ikPrev, ikNext, ikVolume, ikMute,
     ikFullscreen, ikStar, ikPlus, ikMinus, ikRefresh, ikEdit, ikRecord,
     ikBack, ikChevron, ikViewList, ikViewCompact, ikViewGrid, ikViewTiles,
-    ikWinMin, ikWinMax, ikWinRestore, ikClose, ikSettings, ikExternal);
+    ikWinMin, ikWinMax, ikWinRestore, ikClose, ikSettings, ikExternal, ikUp, ikDown, ikWall);
 
   TFlatButton = class(TGraphicControl)
   private
@@ -319,6 +319,24 @@ begin
         C.Brush.Color := clrTitle;
         C.Pen.Color := clrTitle;
         C.Ellipse(cx - 2, cy - 2, cx + 3, cy + 3);
+      end;
+    ikUp:
+      begin
+        C.Pen.Width := 2;
+        C.Polyline([Point(cx - s, cy + s div 2), Point(cx, cy - s div 2), Point(cx + s, cy + s div 2)]);
+      end;
+    ikDown:
+      begin
+        C.Pen.Width := 2;
+        C.Polyline([Point(cx - s, cy - s div 2), Point(cx, cy + s div 2), Point(cx + s, cy - s div 2)]);
+      end;
+    ikWall:
+      begin
+        { сетка 3x3 — «все каналы на весь экран» }
+        d := (2 * s) div 3;
+        for i := 0 to 8 do
+          C.Rectangle(cx - s + (i mod 3) * d, cy - s + (i div 3) * d,
+                      cx - s + (i mod 3) * d + d - 2, cy - s + (i div 3) * d + d - 2);
       end;
     ikExternal:
       begin

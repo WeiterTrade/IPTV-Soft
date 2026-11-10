@@ -85,6 +85,13 @@ end;
 
 procedure TErrorSink.HandleException(Sender: TObject; E: Exception);
 begin
+  { Сбои раскладки окна (например, при сворачивании) не мешают работе —
+    записываем их в журнал без окна с ошибкой. }
+  if E.ClassName = 'ELayoutException' then
+  begin
+    Log('раскладка: ' + E.Message);
+    Exit;
+  end;
   ReportFatal(E, 'Во время работы');
 end;
 

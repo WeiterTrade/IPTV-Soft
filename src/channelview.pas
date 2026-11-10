@@ -34,6 +34,8 @@ type
     FEmptyText: string;
     FDownIndex: Integer;
     FHoverGuide, FDownGuide: Boolean;
+    FLarge: Boolean;
+    procedure SetLarge(V: Boolean);
     FOnGuideClick: TItemEvent;
     function GuideRect(const R: TRect): TRect;
     function HasGuideButton: Boolean;
@@ -90,6 +92,8 @@ type
     property OnSelectionMoved: TItemEvent read FOnSelectionMoved write FOnSelectionMoved;
     { стрелка «телепрограмма» в конце строки (виды «список» и «компактный») }
     property OnGuideClick: TItemEvent read FOnGuideClick write FOnGuideClick;
+    { крупные карточки (режим «все каналы на весь экран») }
+    property Large: Boolean read FLarge write SetLarge;
     property PopupMenu;
     property Align;
     property BorderSpacing;
@@ -276,6 +280,13 @@ begin
     vmCompact:
       begin Cols := 1; CellW := W; CellH := 30; end;
     vmGrid:
+      if FLarge then
+      begin
+        Cols := Math.Max(1, W div 160);
+        CellW := W div Cols;
+        CellH := 170;
+      end
+      else
       begin
         Cols := Math.Max(1, W div 118);
         CellW := W div Cols;
@@ -283,9 +294,9 @@ begin
       end;
   else { vmTiles }
     begin
-      Cols := Math.Max(1, W div 270);
+      if FLarge then Cols := Math.Max(1, W div 330) else Cols := Math.Max(1, W div 270);
       CellW := W div Cols;
-      CellH := 80;
+      if FLarge then CellH := 96 else CellH := 80;
     end;
   end;
 end;
@@ -369,7 +380,7 @@ end;
 
 function TChannelView.HasGuideButton: Boolean;
 begin
-  Result := (not FCatMode) and (FMode in [vmList, vmCompact]);
+  Result := (not FCatMode) and (FMode in [vmList, vmCompact, vmTiles]);
 end;
 
 function TChannelView.GuideRect(const R: TRect): TRect;
@@ -377,7 +388,18 @@ var
   cy: Integer;
 begin
   cy := (R.Top + R.Bottom) div 2;
-  Result := Rect(R.Right - 34, cy - 13, R.Right - 4, cy + 13);
+  if FMode = vmTiles then
+    Result := Rect(R.Right - 40, cy - 14, R.Right - 10, cy + 14)
+  else
+    Result := Rect(R.Right - 34, cy - 13, R.Right - 4, cy + 13);
+end;
+
+procedure TChannelView.SetLarge(V: Boolean);
+begin
+  if V = FLarge then Exit;
+  FLarge := V;
+  ClampScroll;
+  Invalidate;
 end;
 
 function TChannelView.ItemBg(Index: Integer; Card: Boolean): TColor;
@@ -526,7 +548,7 @@ begin
         C.Pen.Width := 2;
         C.RoundRect(Card.Left, Card.Top, Card.Right, Card.Bottom, 14, 14);
         C.Pen.Width := 1;
-        LS := 60;
+        if FLarge then LS := 92 else LS := 60;
         X := (Card.Left + Card.Right - LS) div 2;
         Y := Card.Top + 12;
         if FShowLogos then
@@ -541,7 +563,7 @@ begin
           C.TextOut((Card.Left + Card.Right - TW) div 2, Y + 14, Num);
         end;
         C.Brush.Style := bsClear;
-        C.Font.Size := 9;
+        if FLarge then C.Font.Size := 11 else C.Font.Size := 9;
         if IsCur then
         begin
           C.Font.Style := [fsBold];
@@ -583,7 +605,7 @@ begin
           Inc(X, LS + 12);
         end;
         C.Brush.Style := bsClear;
-        W := Card.Right - X - 30;
+        W := Card.Right - X - 48;
         Y := Card.Top + 9;
         if FShowNumbers then
         begin
@@ -613,7 +635,7 @@ begin
         C.Font.Style := [];
         C.Font.Color := clrDim;
         if It <> nil then Sub := It.Title else Sub := Ch.Group;
-        C.TextOut(X, Y, Ellipsize(C, Sub, W + 20));
+        C.TextOut(X, Y, Ellipsize(C, Sub, W));
         Inc(Y, C.TextHeight('Ag') + 5);
         if It <> nil then
         begin
@@ -622,12 +644,25 @@ begin
           if Frac > 1 then Frac := 1;
           C.Brush.Style := bsSolid;
           C.Brush.Color := clrTrack;
-          C.FillRect(Rect(X, Y, Card.Right - 14, Y + 3));
+          C.FillRect(Rect(X, Y, Card.Right - 48, Y + 3));
           C.Brush.Color := clrAccent;
-          C.FillRect(Rect(X, Y, X + Round((Card.Right - 14 - X) * Frac), Y + 3));
+          C.FillRect(Rect(X, Y, X + Round((Card.Right - 48 - X) * Frac), Y + 3));
         end;
         if IsFav then
-          DrawIcon(C, ikStar, Rect(Card.Right - 26, Card.Top + 6, Card.Right - 6, Card.Top + 26), clrStar, True);
+          DrawIcon(C, ikStar, Rect(Card.Right - 62, Card.Top + 4, Card.Right - 44, Card.Top + 22), clrStar, True);
+        { стрелка «телепрограмма» }
+        Card := GuideRect(R);
+        if (Index = FHover) and FHoverGuide then
+        begin
+          C.Brush.Style := bsSolid;
+          C.Brush.Color := clrPress;
+          C.Pen.Color := clrPress;
+          C.RoundRect(Card.Left, Card.Top, Card.Right, Card.Bottom, 8, 8);
+        end;
+        if Ch.Epg <> nil then
+          DrawIcon(C, ikChevron, Card, clrText, False)
+        else
+          DrawIcon(C, ikChevron, Card, clrDisabled, False);
       end;
   end;
   C.Brush.Style := bsSolid;

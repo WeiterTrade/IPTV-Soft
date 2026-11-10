@@ -72,6 +72,12 @@ type
     FArchiveTitle: string;
     FGuideOpen: Boolean;
     FGuideChannel: TChannel;
+    FInfoOffset, FInfoIdle: Integer;
+    { «все каналы на весь экран» }
+    FWall: Boolean;
+    FWallPrevMode: TViewMode;
+    FWallSideWidth: Integer;
+    FAlignOff: Boolean;
     { разное }
     FPlGen, FEpgGen: Integer;
     FUpdating, FAutoPlayDone, FForceEpg, FShown: Boolean;
@@ -96,6 +102,7 @@ type
     btnGuideBack, btnLive: TFlatButton;
     lblGuideTitle, lblGuideDesc: TLabel;
     guide: TGuideView;
+    btnInfoUp, btnInfoDown, btnWall: TFlatButton;
     btnPrev, btnStop, btnNext, btnFav, btnRec, btnExt, btnMute, btnFull, btnSettings: TFlatButton;
     sldVolume: TFlatSlider;
     tmrStatus, tmrSelect, tmrSearch: TTimer;
@@ -136,6 +143,10 @@ type
     procedure CloseGuide;
     procedure UpdateGuideDesc(It: TEpgItem);
     procedure OpenExternal(Ch: TChannel; const AUrl: string = '');
+    procedure SetChannelWall(Value: Boolean);
+    procedure UpdateSideMax;
+    function InfoItem(Offset: Integer): TEpgItem;
+    function ItemInArchive(Ch: TChannel; It: TEpgItem): Boolean;
     procedure StopPlayback;
     procedure StepChannel(Delta: Integer);
     procedure SetFullscreen(Value: Boolean);
@@ -184,6 +195,15 @@ type
     procedure VideoDblClick(Sender: TObject);
     procedure InfoPaint(Sender: TObject);
     procedure LiveClick(Sender: TObject);
+    procedure FormResize(Sender: TObject);
+    procedure FormWindowStateChange(Sender: TObject);
+    procedure WallClick(Sender: TObject);
+    procedure InfoUpClick(Sender: TObject);
+    procedure InfoDownClick(Sender: TObject);
+    procedure InfoWheel(Sender: TObject; Shift: TShiftState; WheelDelta: Integer;
+      MousePos: TPoint; var Handled: Boolean);
+    procedure InfoClick(Sender: TObject);
+    procedure InfoDblClick(Sender: TObject);
     procedure GuideBackClick(Sender: TObject);
     procedure GuideSelect(Sender: TObject; Item: TEpgItem);
     procedure GuideItemClick(Sender: TObject; Item: TEpgItem);
@@ -460,6 +480,8 @@ begin
   OnShow := @FormShow;
   OnClose := @FormClose;
   OnKeyDown := @FormKeyDown;
+  OnResize := @FormResize;
+  OnWindowStateChange := @FormWindowStateChange;
   if not FSystemFrame then
     BorderStyle := bsNone;
 
@@ -643,6 +665,7 @@ begin
   splSide.Color := clrBg;
   splSide.ParentColor := False;
   splSide.ResizeStyle := rsUpdate;
+  splSide.MinSize := 250;
 
   segTabs := TSegmentBar.Create(Self);
   segTabs.Parent := pnlSide;
@@ -709,6 +732,8 @@ begin
   btnViewTiles := MakeButton(pnlViewRow, ikViewTiles, alLeft, 'Плитка', @ViewModeClick);
   btnViewTiles.Tag := Ord(vmTiles);
   btnViewTiles.Left := 300;
+  btnWall := MakeButton(pnlViewRow, ikWall, alRight, 'Все каналы на весь экран (G)', @WallClick);
+  btnWall.Left := 3000;
   lblCount := TLabel.Create(Self);
   lblCount.Parent := pnlViewRow;
   lblCount.Align := alClient;
@@ -819,13 +844,26 @@ begin
 
   { ---------- основная часть ---------- }
   pnlMain := MakePanel(pnlRoot, alClient, clrBg, 0);
+  pnlMain.Constraints.MinWidth := 320;
   pnlControls := MakePanel(pnlMain, alBottom, clrPanel, 50);
   pnlInfo := MakePanel(pnlMain, alBottom, clrBg, 80);
   pnlInfo.Top := 0;
+  btnInfoDown := MakeButton(pnlInfo, ikDown, alRight, 'Следующие передачи (колёсико мыши)', @InfoDownClick);
+  btnInfoDown.Width := 30;
+  btnInfoDown.Left := 2000;
+  btnInfoUp := MakeButton(pnlInfo, ikUp, alRight, 'Прошедшие передачи (колёсико мыши)', @InfoUpClick);
+  btnInfoUp.Width := 30;
+  btnInfoUp.Left := 1900;
   pbInfo := TPaintBox.Create(Self);
   pbInfo.Parent := pnlInfo;
   pbInfo.Align := alClient;
   pbInfo.OnPaint := @InfoPaint;
+  pbInfo.OnMouseWheel := @InfoWheel;
+  pbInfo.OnClick := @InfoClick;
+  pbInfo.OnDblClick := @InfoDblClick;
+  pbInfo.ShowHint := True;
+  pbInfo.Hint := 'Колёсико мыши или стрелки справа — листать программу.' + LineEnding +
+    'Щелчок по прошедшей передаче — смотреть в записи. Двойной щелчок — вся телепрограмма (E).';
 
   pnlVideo := MakePanel(pnlMain, alClient, clBlack, 0);
   pnlVideo.Font.Color := clrDim;
@@ -1190,6 +1228,7 @@ end;
 procedure TMainForm.SetFullscreen(Value: Boolean);
 begin
   if Value = FFullscreen then Exit;
+  if Value and FWall then SetChannelWall(False);
   FFullscreen := Value;
   if Value then
   begin
@@ -1230,6 +1269,7 @@ begin
     pnlInfo.Visible := True;
     pnlControls.Visible := True;
     UpdateFrameControls;
+    UpdateSideMax;
   end;
 end;
 
@@ -1616,6 +1656,7 @@ end;
 
 procedure TMainForm.AfterPlayStarted(Ch: TChannel);
 begin
+  FInfoOffset := 0;
   FCurrent := Ch;
   FCurrentUrl := Ch.URL;
   FPlaying := True;
@@ -2044,6 +2085,7 @@ procedure TMainForm.FormClose(Sender: TObject; var CloseAction: TCloseAction);
 begin
   if FRecPlayer <> nil then StopRecording('');
   if FFullscreen then SetFullscreen(False);
+  if FWall then SetChannelWall(False);
   FSettings.WinMaximized := FMaxed;
   if FMaxed and not FSystemFrame then
   begin
@@ -2111,9 +2153,20 @@ begin
         CloseGuide;
         Key := 0;
       end
+      else if FWall then
+      begin
+        SetChannelWall(False);
+        Key := 0;
+      end
       else if InEdit and (edSearch.Text <> '') then
       begin
         edSearch.Text := '';
+        Key := 0;
+      end;
+    VK_G:
+      if (not InEdit) and (Shift = []) then
+      begin
+        SetChannelWall(not FWall);
         Key := 0;
       end;
     VK_E:
@@ -2369,6 +2422,12 @@ begin
   end;
   Ch := chView.ChannelAt(Index);
   UpdateTransport;
+  if FWall and (Ch <> nil) then
+  begin
+    SetChannelWall(False);
+    PlayChannel(Ch);
+    Exit;
+  end;
   if (Ch <> nil) and ((Ch <> FCurrent) or (not FPlaying and not FSettings.UseExternalPlayer)) then
     PlayChannel(Ch);
 end;
@@ -2385,13 +2444,14 @@ begin
   end;
   Ch := chView.ChannelAt(Index);
   if Ch = nil then Exit;
+  if FWall then SetChannelWall(False);
   if (Ch <> FCurrent) or not FPlaying then PlayChannel(Ch);
 end;
 
 procedure TMainForm.ViewSelectionMoved(Sender: TObject; Index: Integer);
 begin
   UpdateTransport;
-  if chView.CatMode or FSettings.UseExternalPlayer then Exit;
+  if chView.CatMode or FSettings.UseExternalPlayer or FWall then Exit;
   tmrSelect.Enabled := False;
   tmrSelect.Enabled := True;
 end;
@@ -2470,6 +2530,35 @@ begin
     C.Font.Color := clrDim;
     C.TextOut(X, Y, 'Кнопка «В эфир» внизу вернёт к прямой трансляции');
     Exit;
+  end;
+  if FInfoOffset <> 0 then
+  begin
+    It := InfoItem(FInfoOffset);
+    if It <> nil then
+    begin
+      if It.Stop <= FNowUtc then
+      begin
+        S := 'Было:  ';
+        if ItemInArchive(FCurrent, It) then C.Font.Color := clrAccent else C.Font.Color := clrDim;
+      end
+      else
+      begin
+        S := 'Будет:  ';
+        C.Font.Color := clrText;
+      end;
+      S := S + DayTitle(Trunc(UtcToLocal(It.Start))) + '  ' +
+        FormatDateTime('hh:nn', UtcToLocal(It.Start)) + ' - ' +
+        FormatDateTime('hh:nn', UtcToLocal(It.Stop)) + '   ' + It.Title;
+      C.TextOut(X, Y, Ellipsize(C, S, W - X - 16));
+      Inc(Y, C.TextHeight('Ag') + 2);
+      C.Font.Color := clrDim;
+      if ItemInArchive(FCurrent, It) then
+        S := 'Щёлкните, чтобы посмотреть в записи.  ' + It.Desc
+      else
+        S := It.Desc;
+      C.TextOut(X, Y, Ellipsize(C, S, W - X - 16));
+      Exit;
+    end;
   end;
   It := nil;
   Nx := nil;
@@ -2567,12 +2656,168 @@ begin
       lblRec.Caption := 'ЗАПИСЬ ' + FormatDateTime('hh:nn:ss', Now - FRecStart);
   end;
 
+  if FInfoOffset <> 0 then
+  begin
+    Inc(FInfoIdle);
+    if FInfoIdle > 40 then   { через 20 секунд возвращаемся к текущей передаче }
+    begin
+      FInfoOffset := 0;
+      pbInfo.Invalidate;
+    end;
+  end;
   Inc(FTick);
   if FTick mod 30 = 0 then
   begin
     chView.Invalidate;
     pbInfo.Invalidate;
     if FGuideOpen then guide.Invalidate;
+  end;
+end;
+
+{ ---------- расписание под видео: листание ---------- }
+
+function TMainForm.InfoItem(Offset: Integer): TEpgItem;
+var
+  Ec: TEpgChannel;
+  i, Base: Integer;
+begin
+  Result := nil;
+  if (FCurrent = nil) or (FCurrent.Epg = nil) then Exit;
+  Ec := TEpgChannel(FCurrent.Epg);
+  if Ec.Items.Count = 0 then Exit;
+  Base := Ec.Items.Count - 1;
+  for i := 0 to Ec.Items.Count - 1 do
+    if TEpgItem(Ec.Items[i]).Stop > FNowUtc then
+    begin
+      Base := i;
+      Break;
+    end;
+  i := Base + Offset;
+  if i < 0 then i := 0;
+  if i >= Ec.Items.Count then i := Ec.Items.Count - 1;
+  Result := TEpgItem(Ec.Items[i]);
+end;
+
+function TMainForm.ItemInArchive(Ch: TChannel; It: TEpgItem): Boolean;
+begin
+  Result := (Ch <> nil) and (It <> nil) and (It.Stop <= FNowUtc) and
+    HasArchive(Ch, FSettings.DefaultCatchup) and
+    (It.Start >= FNowUtc - ArchiveDays(Ch));
+end;
+
+procedure TMainForm.InfoUpClick(Sender: TObject);
+begin
+  if (FCurrent = nil) or (FCurrent.Epg = nil) then Exit;
+  if InfoItem(FInfoOffset - 1) <> InfoItem(FInfoOffset) then Dec(FInfoOffset);
+  FInfoIdle := 0;
+  pbInfo.Invalidate;
+end;
+
+procedure TMainForm.InfoDownClick(Sender: TObject);
+begin
+  if (FCurrent = nil) or (FCurrent.Epg = nil) then Exit;
+  if InfoItem(FInfoOffset + 1) <> InfoItem(FInfoOffset) then Inc(FInfoOffset);
+  FInfoIdle := 0;
+  pbInfo.Invalidate;
+end;
+
+procedure TMainForm.InfoWheel(Sender: TObject; Shift: TShiftState; WheelDelta: Integer;
+  MousePos: TPoint; var Handled: Boolean);
+begin
+  if FArchive then Exit;
+  if WheelDelta > 0 then InfoUpClick(nil) else InfoDownClick(nil);
+  Handled := True;
+end;
+
+procedure TMainForm.InfoClick(Sender: TObject);
+var
+  It: TEpgItem;
+begin
+  if (FInfoOffset = 0) or FArchive then Exit;
+  It := InfoItem(FInfoOffset);
+  if ItemInArchive(FCurrent, It) then
+    PlayArchive(FCurrent, It);
+end;
+
+procedure TMainForm.InfoDblClick(Sender: TObject);
+begin
+  OpenGuide(FCurrent);
+end;
+
+{ ---------- все каналы на весь экран ---------- }
+
+procedure TMainForm.SetChannelWall(Value: Boolean);
+begin
+  if Value = FWall then Exit;
+  if Value and FFullscreen then SetFullscreen(False);
+  FWall := Value;
+  btnWall.Checked := Value;
+  if Value then
+  begin
+    if FPlaying then StopPlayback;
+    FWallPrevMode := chView.Mode;
+    FWallSideWidth := pnlSide.Width;
+    if chView.Mode in [vmList, vmCompact] then chView.Mode := vmGrid;
+    chView.Large := True;
+    pnlSide.Constraints.MaxWidth := 0;
+    pnlMain.Visible := False;
+    splSide.Visible := False;
+    pnlSide.Align := alClient;
+    btnWall.Hint := 'Вернуться к плееру (G или Esc)';
+  end
+  else
+  begin
+    pnlSide.Align := alLeft;
+    pnlSide.Width := FWallSideWidth;
+    pnlMain.Visible := True;
+    splSide.Visible := True;
+    splSide.Left := pnlSide.Left + pnlSide.Width + 1;
+    chView.Large := False;
+    chView.Mode := FWallPrevMode;
+    btnWall.Hint := 'Все каналы на весь экран (G)';
+    UpdateSideMax;
+  end;
+  UpdateViewButtons;
+  if FCurrent <> nil then chView.EnsureVisible(chView.IndexOfChannel(FCurrent));
+end;
+
+procedure TMainForm.WallClick(Sender: TObject);
+begin
+  SetChannelWall(not FWall);
+end;
+
+procedure TMainForm.UpdateSideMax;
+var
+  M: Integer;
+begin
+  if FWall or FFullscreen or (pnlRoot = nil) or (pnlSide = nil) then Exit;
+  M := pnlRoot.ClientWidth - 380;
+  if M < 260 then M := 260;
+  if pnlSide.Constraints.MaxWidth <> M then
+    pnlSide.Constraints.MaxWidth := M;
+end;
+
+procedure TMainForm.FormResize(Sender: TObject);
+begin
+  if WindowState <> wsMinimized then UpdateSideMax;
+end;
+
+procedure TMainForm.FormWindowStateChange(Sender: TObject);
+begin
+  { пока окно свёрнуто, не пересчитываем раскладку панелей }
+  if WindowState = wsMinimized then
+  begin
+    if not FAlignOff then
+    begin
+      pnlRoot.DisableAlign;
+      FAlignOff := True;
+    end;
+  end
+  else if FAlignOff then
+  begin
+    FAlignOff := False;
+    pnlRoot.EnableAlign;
+    UpdateSideMax;
   end;
 end;
 
