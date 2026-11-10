@@ -9,7 +9,7 @@ uses
   Classes, SysUtils, Types, Forms, Controls, Graphics, StdCtrls, ExtCtrls,
   Menus, Dialogs, LCLType, Clipbrd, Math, LazUTF8, FileUtil, Process,
   m3u, epg, vlcdyn, netload, appsettings, widgets, playlistdlg, videohost,
-  channelview, logos, winframe, settingspage, applog, guideview, catchup, logodb;
+  channelview, logos, winframe, settingspage, applog, guideview, catchup, logodb, movies, movieview;
 
 type
   TLoadKind = (lkPlaylist, lkEpg);
@@ -31,6 +31,7 @@ type
     Force: Boolean;
     Generation: Integer;
     Playlist: TPlaylistData;
+    Movies: TMovieLib;
     Epg: TEpgData;
     ErrorMsg, Warning: string;
     Ok: Boolean;
@@ -89,6 +90,20 @@ type
     FSettingsOldFrame, FSettingsOldProxy: Boolean;
     FLogoDb: TLogoDb;
     FLogoDbLoading: Boolean;
+    { фильмы }
+    FMovies: TMovieLib;
+    FMovieList: TFPList;
+    FMovieMode: Boolean;
+    FVod, FPaused: Boolean;
+    FCurMovie: TMovie;
+    FMenuMovie: TMovie;
+    segMode: TSegmentBar;
+    mvView: TMovieView;
+    pnlSeek: TPanel;
+    sldSeek: TFlatSlider;
+    lblTime: TLabel;
+    pmMovie: TPopupMenu;
+    miMPlay, miMSources, miMFav, miMCopy: TMenuItem;
     { разное }
     FPlGen, FEpgGen: Integer;
     FUpdating, FAutoPlayDone, FForceEpg, FShown: Boolean;
@@ -175,6 +190,11 @@ type
     procedure OpenSettings(Page: Integer);
     procedure CloseSettings;
     procedure PlaceSettings;
+    procedure UpdateListVisibility;
+    procedure ApplyMovieFilter;
+    procedure SetMovieMode(Value: Boolean);
+    procedure PlayMovie(M: TMovie; SourceIndex: Integer);
+    function IsMovieFav(M: TMovie): Boolean;
     procedure ApplyAfterImport;
     procedure ResolveLogos;
     procedure StartLogoDb;
@@ -210,6 +230,14 @@ type
     procedure FullClick(Sender: TObject);
     procedure SettingsClick(Sender: TObject);
     procedure SettingsPageClose(Sender: TObject);
+    procedure ModeChange(Sender: TObject);
+    procedure MovieClick(Sender: TObject; Index: Integer);
+    procedure SeekChange(Sender: TObject);
+    procedure MovieMenuPopup(Sender: TObject);
+    procedure MovieMenuPlay(Sender: TObject);
+    procedure MovieMenuSource(Sender: TObject);
+    procedure MovieMenuFav(Sender: TObject);
+    procedure MovieMenuCopy(Sender: TObject);
     procedure SettingsPageImported(Sender: TObject);
     procedure SettingsClearLogos(Sender: TObject);
     procedure LogoDbDone(Sender: TObject);
@@ -308,6 +336,18 @@ begin
   T.Slot := Slot;
   T.FreeOnTerminate := True;
   T.Start;
+end;
+
+function MsToStr(Ms: Int64): string;
+var
+  S: Int64;
+begin
+  if Ms < 0 then Ms := 0;
+  S := Ms div 1000;
+  if S >= 3600 then
+    Result := Format('%d:%.2d:%.2d', [S div 3600, (S mod 3600) div 60, S mod 60])
+  else
+    Result := Format('%d:%.2d', [S div 60, S mod 60]);
 end;
 
 function SafeFileName(const S: string): string;
@@ -436,6 +476,7 @@ end;
 
 destructor TLoaderThread.Destroy;
 begin
+  Movies.Free;
   Playlist.Free;
   Epg.Free;
   Sources.Free;
@@ -521,6 +562,13 @@ begin
       begin
         ErrorMsg := Err;
         FreeAndNil(Playlist);
+      end
+      else
+      begin
+        { отделяем фильмы от телеканалов и объединяем повторы }
+        MarkVod(Playlist);
+        Movies := TMovieLib.Create;
+        Movies.Build(Playlist);
       end;
     end
     else
@@ -573,6 +621,7 @@ begin
   inherited CreateNew(TheOwner);
   GFormAlive := True;
   FView := TFPList.Create;
+  FMovieList := TFPList.Create;
   FSettings := TAppSettings.Create;
   FSettings.Load;
   SetAccent(FSettings.Accent);
@@ -677,6 +726,8 @@ begin
   if chView <> nil then chView.Logos := nil;
   FLogos.Free;
   FLogoDb.Free;
+  FMovies.Free;
+  FMovieList.Free;
   FView.Free;
   FPlaylist.Free;
   FEpg.Free;
@@ -805,6 +856,19 @@ begin
   splSide.ResizeStyle := rsUpdate;
   splSide.MinSize := 250;
 
+  segMode := TSegmentBar.Create(Self);
+  segMode.Parent := pnlSide;
+  segMode.Items.Add('Каналы');
+  segMode.Items.Add('Фильмы');
+  segMode.ItemIndex := 0;
+  segMode.Height := 36;
+  segMode.BorderSpacing.Left := 10;
+  segMode.BorderSpacing.Right := 10;
+  segMode.BorderSpacing.Top := 10;
+  segMode.OnChange := @ModeChange;
+  segMode.Visible := False;
+  StackTop(segMode);
+
   segTabs := TSegmentBar.Create(Self);
   segTabs.Parent := pnlSide;
   segTabs.Items.Add('Избранное');
@@ -921,6 +985,35 @@ begin
   chView.OnSelectionMoved := @ViewSelectionMoved;
   chView.OnGuideClick := @ViewGuideClick;
 
+  { сетка фильмов }
+  mvView := TMovieView.Create(Self);
+  mvView.Parent := pnlSide;
+  mvView.Align := alClient;
+  mvView.BorderSpacing.Top := 4;
+  mvView.Logos := FLogos;
+  mvView.IsFavorite := @IsMovieFav;
+  mvView.OnMovieClick := @MovieClick;
+  mvView.OnMovieActivate := @MovieClick;
+  mvView.Visible := False;
+  pmMovie := TPopupMenu.Create(Self);
+  pmMovie.OnPopup := @MovieMenuPopup;
+  miMPlay := TMenuItem.Create(pmMovie);
+  miMPlay.Caption := 'Смотреть';
+  miMPlay.OnClick := @MovieMenuPlay;
+  pmMovie.Items.Add(miMPlay);
+  miMSources := TMenuItem.Create(pmMovie);
+  miMSources.Caption := 'Источники';
+  pmMovie.Items.Add(miMSources);
+  miMFav := TMenuItem.Create(pmMovie);
+  miMFav.Caption := 'В избранное';
+  miMFav.OnClick := @MovieMenuFav;
+  pmMovie.Items.Add(miMFav);
+  miMCopy := TMenuItem.Create(pmMovie);
+  miMCopy.Caption := 'Копировать ссылку';
+  miMCopy.OnClick := @MovieMenuCopy;
+  pmMovie.Items.Add(miMCopy);
+  mvView.PopupMenu := pmMovie;
+
   { телепрограмма канала (вместо списка каналов) }
   pnlGuide := MakePanel(pnlSide, alClient, clrSide, 0);
   pnlGuide.Visible := False;
@@ -996,6 +1089,26 @@ begin
   splInfo.ResizeStyle := rsUpdate;
   splInfo.MinSize := 60;
   pnlControls := MakePanel(pnlBottom, alBottom, clrPanel, 50);
+  { перемотка фильма }
+  pnlSeek := MakePanel(pnlBottom, alBottom, clrPanel, 30);
+  pnlSeek.Top := 0;
+  pnlSeek.Visible := False;
+  lblTime := TLabel.Create(Self);
+  lblTime.Parent := pnlSeek;
+  lblTime.Align := alRight;
+  lblTime.AutoSize := False;
+  lblTime.Width := 150;
+  lblTime.Alignment := taCenter;
+  lblTime.Layout := tlCenter;
+  lblTime.Font.Color := clrDim;
+  lblTime.Font.Size := 8;
+  sldSeek := TFlatSlider.Create(Self);
+  sldSeek.Parent := pnlSeek;
+  sldSeek.Align := alClient;
+  sldSeek.Max := 1000;
+  sldSeek.Position := 0;
+  sldSeek.BorderSpacing.Left := 14;
+  sldSeek.OnChange := @SeekChange;
   pnlInfo := MakePanel(pnlBottom, alClient, clrBg, 0);
   btnInfoDown := MakeButton(pnlInfo, ikDown, alRight, 'Следующие передачи (колёсико мыши)', @InfoDownClick);
   btnInfoDown.Width := 30;
@@ -1194,7 +1307,12 @@ procedure TMainForm.UpdateTransport;
 var
   Ch: TChannel;
 begin
-  if FPlaying then btnStop.Kind := ikStop else btnStop.Kind := ikPlay;
+  if FVod and FPlaying then
+  begin
+    if FPaused then btnStop.Kind := ikPlay else btnStop.Kind := ikPause;
+  end
+  else if FPlaying then btnStop.Kind := ikStop
+  else btnStop.Kind := ikPlay;
   Ch := TargetChannel;
   btnFav.Enabled := Ch <> nil;
   btnFav.Checked := IsFav(Ch);
@@ -1211,8 +1329,7 @@ var
   NoLists: Boolean;
 begin
   NoLists := FSettings.PlaylistCount = 0;
-  lblEmpty.Visible := NoLists and not FGuideOpen;
-  chView.Visible := (not NoLists) and not FGuideOpen;
+  UpdateListVisibility;
   cbPlaylists.Enabled := not NoLists;
   edSearch.Enabled := not NoLists;
 end;
@@ -1610,9 +1727,25 @@ begin
     chView.SetChannels(nil);
     chView.Current := nil;
     FCurrent := nil;
+    mvView.SetMovies(nil);
+    mvView.Current := nil;
+    FCurMovie := nil;
+    FreeAndNil(FMovies);
     FreeAndNil(FPlaylist);
     FPlaylist := T.Playlist;
     T.Playlist := nil;
+    FMovies := T.Movies;
+    T.Movies := nil;
+    if FVod then FCurMovie := FMovies.FindByUrl(FCurrentUrl);
+    mvView.Current := FCurMovie;
+    { переключатель «Каналы | Фильмы» — только если в плейлисте есть фильмы }
+    segMode.Visible := FMovies.Count > 0;
+    if FMovies.Count = 0 then
+      SetMovieMode(False)
+    else if FMovies.Count = FPlaylist.Count then
+      SetMovieMode(True)
+    else if not T.Refresh then
+      SetMovieMode(FSettings.LastMode = 1);
     if FPlaying then FCurrent := FPlaylist.FindByUrl(FCurrentUrl);
     chView.Current := FCurrent;
     if not T.Refresh then FInCategory := False;
@@ -1678,9 +1811,77 @@ begin
   pbInfo.Invalidate;
 end;
 
+procedure TMainForm.UpdateListVisibility;
+var
+  NoLists, ShowCats: Boolean;
+begin
+  NoLists := FSettings.PlaylistCount = 0;
+  ShowCats := FMovieMode and (segTabs.ItemIndex = TAB_CAT) and not FInCategory;
+  lblEmpty.Visible := NoLists and not FGuideOpen;
+  chView.Visible := (not NoLists) and not FGuideOpen and ((not FMovieMode) or ShowCats);
+  mvView.Visible := (not NoLists) and not FGuideOpen and FMovieMode and not ShowCats;
+  btnViewList.Visible := not FMovieMode;
+  btnViewCompact.Visible := not FMovieMode;
+  btnViewGrid.Visible := not FMovieMode;
+  btnViewTiles.Visible := not FMovieMode;
+end;
+
+procedure TMainForm.ApplyMovieFilter;
+var
+  i: Integer;
+  M: TMovie;
+  Q: string;
+  Cats: TStringList;
+  Tab: Integer;
+begin
+  Tab := segTabs.ItemIndex;
+  Q := UTF8LowerCase(Trim(edSearch.Text));
+  FMovieList.Clear;
+  if FMovies = nil then
+  begin
+    mvView.SetMovies(nil);
+    lblCount.Caption := '';
+    Exit;
+  end;
+  if (Tab = TAB_CAT) and not FInCategory then
+  begin
+    Cats := TStringList.Create;
+    try
+      for i := 0 to FMovies.Categories.Count - 1 do
+        if (Q = '') or (Pos(Q, UTF8LowerCase(FMovies.Categories[i])) > 0) then
+          Cats.AddObject(FMovies.Categories[i], FMovies.Categories.Objects[i]);
+      chView.EmptyText := 'В плейлисте нет категорий фильмов';
+      chView.SetCategories(Cats);
+      lblCount.Caption := Format('Категорий: %d', [Cats.Count]);
+    finally
+      Cats.Free;
+    end;
+    Exit;
+  end;
+  for i := 0 to FMovies.Count - 1 do
+  begin
+    M := FMovies.Get(i);
+    if (Tab = TAB_FAV) and not IsMovieFav(M) then Continue;
+    if (Tab = TAB_CAT) and (M.Groups.IndexOf(FCategory) < 0) then Continue;
+    if (Q <> '') and (Pos(Q, M.TitleLower) = 0) then Continue;
+    FMovieList.Add(M);
+  end;
+  if Tab = TAB_FAV then
+    mvView.EmptyText := 'Избранных фильмов пока нет. Правая кнопка мыши → «В избранное».'
+  else if FMovies.Count = 0 then
+    mvView.EmptyText := 'В этом плейлисте нет фильмов'
+  else
+    mvView.EmptyText := 'Ничего не найдено';
+  mvView.SetMovies(FMovieList);
+  if FMovieList.Count = FMovies.Count then
+    lblCount.Caption := Format('Фильмов: %d', [FMovies.Count])
+  else
+    lblCount.Caption := Format('%d из %d', [FMovieList.Count, FMovies.Count]);
+end;
+
 procedure TMainForm.ApplyFilter;
 var
-  i, k, NoCatCount: Integer;
+  i, k, NoCatCount, Total: Integer;
   Ch: TChannel;
   Q, Grp: string;
   Counts, Cats: TStringList;
@@ -1697,80 +1898,94 @@ begin
   FView.Clear;
   pnlBack.Visible := (Tab = TAB_CAT) and FInCategory and not FGuideOpen;
   if FInCategory then lblBack.Caption := FCategory;
-
-  if FPlaylist = nil then
-  begin
-    chView.EmptyText := '';
-    chView.SetChannels(nil);
-    lblCount.Caption := '';
-    Exit;
-  end;
-
-  { список категорий }
-  if (Tab = TAB_CAT) and not FInCategory then
-  begin
-    Counts := TStringList.Create;
-    Cats := TStringList.Create;
-    try
-      Counts.Sorted := True;
-      Counts.CaseSensitive := True;
-      NoCatCount := 0;
-      for i := 0 to FPlaylist.Count - 1 do
-      begin
-        Grp := FPlaylist.Get(i).Group;
-        if Grp = '' then
-          Inc(NoCatCount)
-        else if Counts.Find(Grp, k) then
-          Counts.Objects[k] := TObject(PtrInt(Counts.Objects[k]) + 1)
-        else
-          Counts.AddObject(Grp, TObject(PtrInt(1)));
-      end;
-      for i := 0 to FPlaylist.Groups.Count - 1 do
-      begin
-        Grp := FPlaylist.Groups[i];
-        if (Q <> '') and (Pos(Q, UTF8LowerCase(Grp)) = 0) then Continue;
-        if Counts.Find(Grp, k) then
-          Cats.AddObject(Grp, Counts.Objects[k]);
-      end;
-      if (NoCatCount > 0) and ((Q = '') or (Pos(Q, UTF8LowerCase(NO_CATEGORY)) > 0)) then
-        Cats.AddObject(NO_CATEGORY, TObject(PtrInt(NoCatCount)));
-      chView.EmptyText := 'В плейлисте нет категорий';
-      chView.SetCategories(Cats);
-      lblCount.Caption := Format('Категорий: %d', [Cats.Count]);
-    finally
-      Cats.Free;
-      Counts.Free;
+  try
+    if FPlaylist = nil then
+    begin
+      chView.EmptyText := '';
+      chView.SetChannels(nil);
+      mvView.SetMovies(nil);
+      lblCount.Caption := '';
+      Exit;
     end;
-    Exit;
-  end;
 
-  { каналы }
-  for i := 0 to FPlaylist.Count - 1 do
-  begin
-    Ch := FPlaylist.Get(i);
-    case Tab of
-      TAB_FAV: if not IsFav(Ch) then Continue;
-      TAB_CAT:
-        if FCategoryNone then
+    if FMovieMode then
+    begin
+      ApplyMovieFilter;
+      Exit;
+    end;
+
+    { список категорий (только телеканалы, без фильмов) }
+    if (Tab = TAB_CAT) and not FInCategory then
+    begin
+      Counts := TStringList.Create;
+      Cats := TStringList.Create;
+      try
+        Counts.Sorted := True;
+        Counts.CaseSensitive := True;
+        NoCatCount := 0;
+        for i := 0 to FPlaylist.Count - 1 do
         begin
-          if Ch.Group <> '' then Continue;
-        end
-        else if Ch.Group <> FCategory then Continue;
+          if FPlaylist.Get(i).IsVod then Continue;
+          Grp := FPlaylist.Get(i).Group;
+          if Grp = '' then
+            Inc(NoCatCount)
+          else if Counts.Find(Grp, k) then
+            Counts.Objects[k] := TObject(PtrInt(Counts.Objects[k]) + 1)
+          else
+            Counts.AddObject(Grp, TObject(PtrInt(1)));
+        end;
+        for i := 0 to FPlaylist.Groups.Count - 1 do
+        begin
+          Grp := FPlaylist.Groups[i];
+          if (Q <> '') and (Pos(Q, UTF8LowerCase(Grp)) = 0) then Continue;
+          if Counts.Find(Grp, k) then
+            Cats.AddObject(Grp, Counts.Objects[k]);
+        end;
+        if (NoCatCount > 0) and ((Q = '') or (Pos(Q, UTF8LowerCase(NO_CATEGORY)) > 0)) then
+          Cats.AddObject(NO_CATEGORY, TObject(PtrInt(NoCatCount)));
+        chView.EmptyText := 'В плейлисте нет категорий';
+        chView.SetCategories(Cats);
+        lblCount.Caption := Format('Категорий: %d', [Cats.Count]);
+      finally
+        Cats.Free;
+        Counts.Free;
+      end;
+      Exit;
     end;
-    if not Match(Ch) then Continue;
-    FView.Add(Ch);
+
+    { каналы }
+    Total := 0;
+    for i := 0 to FPlaylist.Count - 1 do
+    begin
+      Ch := FPlaylist.Get(i);
+      if Ch.IsVod then Continue;
+      Inc(Total);
+      case Tab of
+        TAB_FAV: if not IsFav(Ch) then Continue;
+        TAB_CAT:
+          if FCategoryNone then
+          begin
+            if Ch.Group <> '' then Continue;
+          end
+          else if Ch.Group <> FCategory then Continue;
+      end;
+      if not Match(Ch) then Continue;
+      FView.Add(Ch);
+    end;
+
+    if Tab = TAB_FAV then
+      chView.EmptyText := 'Избранных каналов пока нет. Нажмите звёздочку под видео.'
+    else
+      chView.EmptyText := 'Ничего не найдено';
+    chView.SetChannels(FView);
+
+    if FView.Count = Total then
+      lblCount.Caption := Format('Каналов: %d', [Total])
+    else
+      lblCount.Caption := Format('%d из %d', [FView.Count, Total]);
+  finally
+    UpdateListVisibility;
   end;
-
-  if Tab = TAB_FAV then
-    chView.EmptyText := 'Избранных каналов пока нет. Нажмите звёздочку под видео.'
-  else
-    chView.EmptyText := 'Ничего не найдено';
-  chView.SetChannels(FView);
-
-  if FView.Count = FPlaylist.Count then
-    lblCount.Caption := Format('Каналов: %d', [FPlaylist.Count])
-  else
-    lblCount.Caption := Format('%d из %d', [FView.Count, FPlaylist.Count]);
 end;
 
 procedure TMainForm.OpenCategory(Index: Integer);
@@ -1909,6 +2124,16 @@ begin
   Caption := Ch.Name + ' — ' + APP_NAME;
   chView.Current := Ch;
   btnLive.Visible := FArchive;
+  pnlSeek.Visible := FVod;
+  sldSeek.Position := 0;
+  lblTime.Caption := '';
+  if FCurMovie <> nil then
+  begin
+    mvView.Current := FCurMovie;
+    Caption := FCurMovie.Title + ' — ' + APP_NAME;
+  end
+  else
+    mvView.Current := nil;
   if FArchive then guide.PlayingStart := FArchiveStart else guide.PlayingStart := 0;
   guide.Invalidate;
   UpdateTransport;
@@ -1926,6 +2151,9 @@ begin
   if StartMedia(Ch, Ch.URL) then
   begin
     FArchive := False;
+    FVod := Ch.IsVod;
+    FPaused := False;
+    if FVod and (FMovies <> nil) then FCurMovie := FMovies.FindByUrl(Ch.URL) else FCurMovie := nil;
     AfterPlayStarted(Ch);
   end;
 end;
@@ -1951,6 +2179,8 @@ begin
   if StartMedia(Ch, Url) then
   begin
     FArchive := True;
+    FVod := False;
+    FCurMovie := nil;
     FArchiveStart := It.Start;
     FArchiveStop := It.Stop;
     FArchiveTitle := It.Title;
@@ -2024,6 +2254,9 @@ begin
   FSlot := -1;
   FPlaying := False;
   FArchive := False;
+  FVod := False;
+  FPaused := False;
+  pnlSeek.Visible := False;
   btnLive.Visible := False;
   guide.PlayingStart := 0;
   guide.Invalidate;
@@ -2044,13 +2277,14 @@ end;
 
 procedure TMainForm.OpenGuide(Ch: TChannel);
 begin
-  if Ch = nil then Exit;
+  if (Ch = nil) or Ch.IsVod then Exit;
   FGuideChannel := Ch;
   FGuideOpen := True;
   edSearch.Visible := False;
   pnlViewRow.Visible := False;
   pnlBack.Visible := False;
   chView.Visible := False;
+  mvView.Visible := False;
   lblEmpty.Visible := False;
   pnlGuide.Visible := True;
   lblGuideTitle.Caption := Ch.Name;
@@ -2152,7 +2386,7 @@ var
   Idx: Integer;
   Ch: TChannel;
 begin
-  if chView.CatMode or (FView.Count = 0) then Exit;
+  if FVod or FMovieMode or chView.CatMode or (FView.Count = 0) then Exit;
   Idx := -1;
   if FCurrent <> nil then Idx := FView.IndexOf(FCurrent);
   if Idx < 0 then Idx := chView.Selected;
@@ -2739,6 +2973,13 @@ procedure TMainForm.StopClick(Sender: TObject);
 var
   Ch: TChannel;
 begin
+  if FPlaying and FVod and (FPlayer <> nil) then
+  begin
+    FPaused := not FPaused;
+    libvlc_media_player_set_pause(FPlayer, Ord(FPaused));
+    UpdateTransport;
+    Exit;
+  end;
   if FPlaying then
     StopPlayback
   else
@@ -2751,6 +2992,13 @@ end;
 
 procedure TMainForm.FavClick(Sender: TObject);
 begin
+  if FVod and (FCurMovie <> nil) then
+  begin
+    FSettings.ToggleFavorite(FCurMovie.Url);
+    if FMovieMode and (segTabs.ItemIndex = TAB_FAV) then ApplyFilter else mvView.Invalidate;
+    UpdateTransport;
+    Exit;
+  end;
   ToggleFavorite(TargetChannel);
 end;
 
@@ -2924,9 +3172,35 @@ begin
   C.Font.Style := [fsBold];
   C.Font.Color := clrText;
   S := FCurrent.Name;
-  if FSettings.ShowNumbers then S := IntToStr(FCurrent.Number) + '.  ' + S;
+  if FVod and (FCurMovie <> nil) then
+  begin
+    S := FCurMovie.Title;
+    if FCurMovie.Year <> '' then S := S + '  (' + FCurMovie.Year + ')';
+  end
+  else if FSettings.ShowNumbers then S := IntToStr(FCurrent.Number) + '.  ' + S;
   C.TextOut(X, Y, Ellipsize(C, S, W - X - 16));
   Inc(Y, C.TextHeight('Ag') + 4);
+  if FVod then
+  begin
+    C.Font.Size := 9;
+    C.Font.Style := [];
+    C.Font.Color := clrDim;
+    if FCurMovie <> nil then
+    begin
+      S := '';
+      for k := 0 to FCurMovie.Groups.Count - 1 do
+      begin
+        if S <> '' then S := S + ', ';
+        S := S + FCurMovie.Groups[k];
+      end;
+      C.TextOut(X, Y, Ellipsize(C, S, W - X - 16));
+      Inc(Y, C.TextHeight('Ag') + 4);
+      if FCurMovie.Sources.Count > 1 then
+        C.TextOut(X, Y, 'Источник ' + IntToStr(FCurMovie.Sources.IndexOf(FCurrent) + 1) + ' из ' +
+          IntToStr(FCurMovie.Sources.Count) + '  ·  другие — правой кнопкой мыши на постере');
+    end;
+    Exit;
+  end;
 
   C.Font.Size := 9;
   C.Font.Style := [];
@@ -3024,6 +3298,7 @@ procedure TMainForm.StatusTimer(Sender: TObject);
 var
   St: Integer;
   S: string;
+  Len, Tm: Int64;
 begin
   FNowUtc := NowUtc;
   chView.NowUtc := FNowUtc;
@@ -3048,13 +3323,25 @@ begin
             ApplyVolume;
           end;
         VLC_STATE_PAUSED:    S := 'Пауза';
-        VLC_STATE_ENDED:     S := 'Трансляция завершилась';
+        VLC_STATE_ENDED:
+          if FVod then S := 'Фильм закончился' else S := 'Трансляция завершилась';
         VLC_STATE_ERROR:     S := 'Не удалось открыть поток. Канал недоступен или ссылка устарела.';
       else
         S := '';
       end;
       FPlayerStatus := S;
       UpdateStatusLabel;
+    end;
+  end;
+
+  if FVod and (FPlayer <> nil) then
+  begin
+    Len := libvlc_media_player_get_length(FPlayer);
+    Tm := libvlc_media_player_get_time(FPlayer);
+    if Len > 0 then
+    begin
+      if not sldSeek.Dragging then sldSeek.Position := Round(Tm * 1000 / Len);
+      lblTime.Caption := MsToStr(Tm) + ' / ' + MsToStr(Len);
     end;
   end;
 
@@ -3181,6 +3468,7 @@ begin
     FWallSideWidth := pnlSide.Width;
     if chView.Mode in [vmList, vmCompact] then chView.Mode := vmGrid;
     chView.Large := True;
+    mvView.Large := True;
     pnlSide.Constraints.MaxWidth := 0;
     pnlMain.Visible := False;
     splSide.Visible := False;
@@ -3195,6 +3483,7 @@ begin
     splSide.Visible := True;
     splSide.Left := pnlSide.Left + pnlSide.Width + 1;
     chView.Large := False;
+    mvView.Large := False;
     chView.Mode := FWallPrevMode;
     btnWall.Hint := 'Все каналы на весь экран (G)';
     UpdateSideMax;
@@ -3252,6 +3541,136 @@ begin
     pnlRoot.EnableAlign;
     UpdateSideMax;
   end;
+end;
+
+{ ---------- фильмы ---------- }
+
+function TMainForm.IsMovieFav(M: TMovie): Boolean;
+begin
+  Result := (M <> nil) and FSettings.IsFavorite(M.Url);
+end;
+
+procedure TMainForm.SetMovieMode(Value: Boolean);
+begin
+  if Value and ((FMovies = nil) or (FMovies.Count = 0)) then Value := False;
+  CloseGuide;
+  if FMovieMode <> Value then
+  begin
+    FMovieMode := Value;
+    FInCategory := False;
+  end;
+  if Value then segMode.ItemIndex := 1 else segMode.ItemIndex := 0;
+  if Value then
+  begin
+    segTabs.Items[1] := 'Все фильмы';
+    edSearch.TextHint := 'Поиск фильма (Ctrl+F)';
+  end
+  else
+  begin
+    segTabs.Items[1] := 'Все каналы';
+    edSearch.TextHint := 'Поиск (Ctrl+F)';
+  end;
+  segTabs.Invalidate;
+  FSettings.LastMode := Ord(Value);
+  ApplyFilter;
+end;
+
+procedure TMainForm.ModeChange(Sender: TObject);
+begin
+  SetMovieMode(segMode.ItemIndex = 1);
+end;
+
+procedure TMainForm.PlayMovie(M: TMovie; SourceIndex: Integer);
+var
+  Src: TChannel;
+begin
+  if (M = nil) or (M.Sources.Count = 0) then Exit;
+  if (SourceIndex < 0) or (SourceIndex >= M.Sources.Count) then SourceIndex := 0;
+  Src := TChannel(M.Sources[SourceIndex]);
+  if FWall then SetChannelWall(False);
+  if FSettings.UseExternalPlayer then
+  begin
+    OpenExternal(Src, Src.URL);
+    Exit;
+  end;
+  if StartMedia(Src, Src.URL) then
+  begin
+    FArchive := False;
+    FVod := True;
+    FPaused := False;
+    FCurMovie := M;
+    AfterPlayStarted(Src);
+  end;
+end;
+
+procedure TMainForm.MovieClick(Sender: TObject; Index: Integer);
+var
+  M: TMovie;
+begin
+  M := mvView.MovieAt(Index);
+  if M = nil then Exit;
+  if (M = FCurMovie) and FPlaying and not FWall then Exit;
+  PlayMovie(M, 0);
+end;
+
+procedure TMainForm.SeekChange(Sender: TObject);
+var
+  Len: Int64;
+begin
+  if not FVod or (FPlayer = nil) then Exit;
+  Len := libvlc_media_player_get_length(FPlayer);
+  if Len > 0 then
+    libvlc_media_player_set_time(FPlayer, Len * sldSeek.Position div 1000);
+end;
+
+procedure TMainForm.MovieMenuPopup(Sender: TObject);
+var
+  i: Integer;
+  Mi: TMenuItem;
+  Src: TChannel;
+begin
+  FMenuMovie := mvView.SelectedMovie;
+  miMSources.Clear;
+  miMPlay.Enabled := FMenuMovie <> nil;
+  miMFav.Enabled := FMenuMovie <> nil;
+  miMCopy.Enabled := FMenuMovie <> nil;
+  miMSources.Enabled := (FMenuMovie <> nil) and (FMenuMovie.Sources.Count > 0);
+  if FMenuMovie = nil then Exit;
+  if IsMovieFav(FMenuMovie) then miMFav.Caption := 'Убрать из избранного' else miMFav.Caption := 'В избранное';
+  miMSources.Caption := 'Источники (' + IntToStr(FMenuMovie.Sources.Count) + ')';
+  for i := 0 to FMenuMovie.Sources.Count - 1 do
+  begin
+    Src := TChannel(FMenuMovie.Sources[i]);
+    Mi := TMenuItem.Create(miMSources);
+    Mi.Caption := 'Источник ' + IntToStr(i + 1) + ' — ' + Src.Name;
+    if Src.Group <> '' then Mi.Caption := Mi.Caption + '  [' + Src.Group + ']';
+    Mi.Tag := i;
+    Mi.OnClick := @MovieMenuSource;
+    Mi.Checked := (Src = FCurrent) and FVod;
+    miMSources.Add(Mi);
+  end;
+end;
+
+procedure TMainForm.MovieMenuPlay(Sender: TObject);
+begin
+  PlayMovie(FMenuMovie, 0);
+end;
+
+procedure TMainForm.MovieMenuSource(Sender: TObject);
+begin
+  PlayMovie(FMenuMovie, TMenuItem(Sender).Tag);
+end;
+
+procedure TMainForm.MovieMenuFav(Sender: TObject);
+begin
+  if FMenuMovie = nil then Exit;
+  FSettings.ToggleFavorite(FMenuMovie.Url);
+  if FMovieMode and (segTabs.ItemIndex = TAB_FAV) then ApplyFilter else mvView.Invalidate;
+end;
+
+procedure TMainForm.MovieMenuCopy(Sender: TObject);
+begin
+  if FMenuMovie <> nil then Clipboard.AsText := FMenuMovie.Url;
 end;
 
 procedure TMainForm.MenuPopup(Sender: TObject);

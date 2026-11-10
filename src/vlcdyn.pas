@@ -40,6 +40,10 @@ var
   libvlc_audio_set_mute: procedure(mp: Pointer; status: LongInt); cdecl;
   libvlc_video_set_mouse_input: procedure(mp: Pointer; enable: LongWord); cdecl;
   libvlc_video_set_key_input: procedure(mp: Pointer; enable: LongWord); cdecl;
+  libvlc_media_player_get_length: function(mp: Pointer): Int64; cdecl;
+  libvlc_media_player_get_time: function(mp: Pointer): Int64; cdecl;
+  libvlc_media_player_set_time: procedure(mp: Pointer; t: Int64); cdecl;
+  libvlc_media_player_set_pause: procedure(mp: Pointer; doPause: LongInt); cdecl;
 
 { AppDir — папка программы (с завершающим разделителем). }
 function LoadVlc(const AppDir: string; out ErrorMsg: string): Boolean;
@@ -128,6 +132,10 @@ begin
     Pointer(libvlc_audio_set_mute) := Need('libvlc_audio_set_mute');
     Pointer(libvlc_video_set_mouse_input) := Need('libvlc_video_set_mouse_input');
     Pointer(libvlc_video_set_key_input) := Need('libvlc_video_set_key_input');
+    Pointer(libvlc_media_player_get_length) := Need('libvlc_media_player_get_length');
+    Pointer(libvlc_media_player_get_time) := Need('libvlc_media_player_get_time');
+    Pointer(libvlc_media_player_set_time) := Need('libvlc_media_player_set_time');
+    Pointer(libvlc_media_player_set_pause) := Need('libvlc_media_player_set_pause');
     Result := True;
   except
     on E: Exception do

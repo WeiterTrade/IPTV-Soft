@@ -36,6 +36,7 @@ type
     LastPlaylist: Integer;
     LastUrl: string;
     LastTab: Integer;
+    LastMode: Integer;           { 0 — каналы, 1 — фильмы }
     { вид }
     ViewMode: Integer;           { 0 список, 1 компактный, 2 сетка, 3 плитка }
     ShowNumbers: Boolean;
@@ -209,6 +210,7 @@ begin
   LastPlaylist := Ini.ReadInteger('General', 'LastPlaylist', 0);
   LastUrl := Ini.ReadString('General', 'LastUrl', '');
   LastTab := Ini.ReadInteger('General', 'LastTab', LastTab);
+  LastMode := Ini.ReadInteger('General', 'LastMode', LastMode);
 
   ViewMode := Ini.ReadInteger('View', 'Mode', ViewMode);
   ShowNumbers := Ini.ReadBool('View', 'ShowNumbers', ShowNumbers);
@@ -281,6 +283,7 @@ begin
   Ini.WriteInteger('General', 'LastPlaylist', LastPlaylist);
   Ini.WriteString('General', 'LastUrl', LastUrl);
   Ini.WriteInteger('General', 'LastTab', LastTab);
+  Ini.WriteInteger('General', 'LastMode', LastMode);
 
   Ini.WriteInteger('View', 'Mode', ViewMode);
   Ini.WriteBool('View', 'ShowNumbers', ShowNumbers);

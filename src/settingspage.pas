@@ -23,9 +23,9 @@ type
   private
     FS: TAppSettings;
     FOnClose, FOnImported, FOnClearLogos: TNotifyEvent;
-    FNav, FHeader, FContent: TPanel;
+    FNav, FRight, FHeader, FContent: TPanel;
     lblHeader: TLabel;
-    btnDone: TFlatButton;
+    btnDone, btnBack: TFlatButton;
     FNavButtons: array[0..SEC_COUNT - 1] of TFlatButton;
     FPages: array[0..SEC_COUNT - 1] of TPanel;
     FSection: Integer;
@@ -142,9 +142,17 @@ begin
     if i = SEC_LOGOS then FNavButtons[i].IconColor := clrStar;
   end;
 
-  { заголовок раздела и кнопка «Готово» }
+  { правая часть: заголовок раздела + содержимое }
+  FRight := TPanel.Create(Self);
+  FRight.Parent := Self;
+  FRight.BevelOuter := bvNone;
+  FRight.Color := clrBg;
+  FRight.ParentColor := False;
+  FRight.Align := alClient;
+
+  { заголовок раздела: «назад», название, «Готово» }
   FHeader := TPanel.Create(Self);
-  FHeader.Parent := Self;
+  FHeader.Parent := FRight;
   FHeader.BevelOuter := bvNone;
   FHeader.Color := clrBg;
   FHeader.ParentColor := False;
@@ -163,6 +171,17 @@ begin
   btnDone.BorderSpacing.Right := 24;
   btnDone.OnClick := @DoneClick;
 
+  btnBack := TFlatButton.Create(Self);
+  btnBack.Parent := FHeader;
+  btnBack.Kind := ikBack;
+  btnBack.Hint := 'Назад к просмотру (Esc)';
+  btnBack.Width := 44;
+  btnBack.Align := alLeft;
+  btnBack.BorderSpacing.Left := 24;
+  btnBack.BorderSpacing.Top := 14;
+  btnBack.BorderSpacing.Bottom := 14;
+  btnBack.OnClick := @DoneClick;
+
   lblHeader := TLabel.Create(Self);
   lblHeader.Parent := FHeader;
   lblHeader.Align := alClient;
@@ -171,10 +190,10 @@ begin
   lblHeader.Font.Size := 16;
   lblHeader.Font.Style := [fsBold];
   lblHeader.Font.Color := clrText;
-  lblHeader.BorderSpacing.Left := X0;
+  lblHeader.BorderSpacing.Left := 8;
 
   FContent := TPanel.Create(Self);
-  FContent.Parent := Self;
+  FContent.Parent := FRight;
   FContent.BevelOuter := bvNone;
   FContent.Color := clrBg;
   FContent.ParentColor := False;

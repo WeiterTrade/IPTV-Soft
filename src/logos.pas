@@ -16,6 +16,8 @@ const
   { открытый сервис преобразования картинок (WebP, SVG и др. -> PNG) }
   PROXY_URL = 'https://images.weserv.nl/?url=';
   PROXY_PARAMS = '&w=144&h=144&fit=inside&output=png';
+  POSTER_SIZE = 300;
+  POSTER_PARAMS = '&w=300&h=450&fit=inside&output=png';
 
 type
   { Уменьшенная копия логотипа с прозрачностью: RGBA, premultiplied }
@@ -60,6 +62,8 @@ type
     destructor Destroy; override;
     { Готовая картинка Size x Size на фоне Bg или nil (будет готова позже). }
     function Get(const Url: string; Size: Integer; Bg: TColor): TBitmap;
+    { Постер фильма W x H (обрезается по центру, как в онлайн-кинотеатрах). }
+    function GetPoster(const Url: string; W, H: Integer; Bg: TColor): TBitmap;
     procedure Delivered(List: TList);
     { True — логотип по этой ссылке получить не удалось (формат или ошибка сети). }
     function IsFailed(const Url: string): Boolean;
@@ -74,7 +78,7 @@ type
 implementation
 
 uses
-  IntfGraphics, FPImage, FPReadPNG, FPReadJPEG, FPReadBMP, FPReadGif,
+  Math, IntfGraphics, FPImage, FPReadPNG, FPReadJPEG, FPReadBMP, FPReadGif,
   netload, appsettings, applog;
 
 type
@@ -122,7 +126,7 @@ begin
 end;
 
 { Загрузка файла и уменьшение до MASTER_SIZE с усреднением (в фоне). }
-function MakeMaster(const Path: string): TLogoMaster;
+function MakeMaster(const Path: string; MaxSize: Integer = MASTER_SIZE): TLogoMaster;
 var
   Img: TFPMemoryImage;
   W, H, TW, TH, dx, dy, sx, sy, sx0, sx1, sy0, sy1, n, k: Integer;
@@ -142,13 +146,13 @@ begin
     if (W <= 0) or (H <= 0) then Exit;
     if W >= H then
     begin
-      TW := MASTER_SIZE;
-      TH := Round(H * MASTER_SIZE / W);
+      TW := MaxSize;
+      TH := Round(H * MaxSize / W);
     end
     else
     begin
-      TH := MASTER_SIZE;
-      TW := Round(W * MASTER_SIZE / H);
+      TH := MaxSize;
+      TW := Round(W * MaxSize / H);
     end;
     if TW < 1 then TW := 1;
     if TH < 1 then TH := 1;
@@ -268,6 +272,73 @@ begin
   end;
 end;
 
+{ Постер: изображение заполняет W x H целиком, лишнее обрезается по центру. }
+function RenderPoster(M: TLogoMaster; W, H: Integer; Bg: TColor): TBitmap;
+var
+  Dst: TLazIntfImage;
+  SW, SH, OX, OY, dx, dy, sx, sy, sx0, sx1, sy0, sy1, n, k: Integer;
+  SR, SG, SB, SA, A, BR, BGr, BB: Integer;
+  Scale: Double;
+  BC: TColor;
+  C: TFPColor;
+begin
+  { какая часть заготовки попадёт в карточку }
+  Scale := Math.Max(W / M.W, H / M.H);
+  SW := Math.Min(M.W, Round(W / Scale));
+  SH := Math.Min(M.H, Round(H / Scale));
+  if SW < 1 then SW := 1;
+  if SH < 1 then SH := 1;
+  OX := (M.W - SW) div 2;
+  OY := (M.H - SH) div 2;
+  BC := ColorToRGB(Bg);
+  BR := Red(BC);
+  BGr := Green(BC);
+  BB := Blue(BC);
+  Result := TBitmap.Create;
+  Result.PixelFormat := pf24bit;
+  Result.SetSize(W, H);
+  Result.Canvas.Brush.Color := Bg;
+  Result.Canvas.FillRect(0, 0, W, H);
+  Dst := Result.CreateIntfImage;
+  try
+    for dy := 0 to H - 1 do
+    begin
+      sy0 := OY + dy * SH div H;
+      sy1 := OY + (dy + 1) * SH div H;
+      if sy1 <= sy0 then sy1 := sy0 + 1;
+      if sy1 > M.H then sy1 := M.H;
+      for dx := 0 to W - 1 do
+      begin
+        sx0 := OX + dx * SW div W;
+        sx1 := OX + (dx + 1) * SW div W;
+        if sx1 <= sx0 then sx1 := sx0 + 1;
+        if sx1 > M.W then sx1 := M.W;
+        SR := 0; SG := 0; SB := 0; SA := 0; n := 0;
+        for sy := sy0 to sy1 - 1 do
+          for sx := sx0 to sx1 - 1 do
+          begin
+            k := (sy * M.W + sx) * 4;
+            Inc(SR, M.Px[k]);
+            Inc(SG, M.Px[k + 1]);
+            Inc(SB, M.Px[k + 2]);
+            Inc(SA, M.Px[k + 3]);
+            Inc(n);
+          end;
+        if n = 0 then Continue;
+        A := SA div n;
+        C.red := (SR div n + BR * (255 - A) div 255) * 257;
+        C.green := (SG div n + BGr * (255 - A) div 255) * 257;
+        C.blue := (SB div n + BB * (255 - A) div 255) * 257;
+        C.alpha := alphaOpaque;
+        Dst.Colors[dx, dy] := C;
+      end;
+    end;
+    Result.LoadFromIntfImage(Dst);
+  finally
+    Dst.Free;
+  end;
+end;
+
 { TLogoWorker }
 
 constructor TLogoWorker.Create(const ADir: string);
@@ -353,12 +424,12 @@ begin
       Result := Result + '%' + IntToHex(Ord(S[i]), 2);
 end;
 
-function TryMaster(const Path: string): TLogoMaster;
+function TryMaster(const Path: string; MaxSize: Integer = MASTER_SIZE): TLogoMaster;
 begin
   Result := nil;
   if Path = '' then Exit;
   try
-    Result := MakeMaster(Path);
+    Result := MakeMaster(Path, MaxSize);
   except
     Result := nil;
   end;
@@ -394,7 +465,8 @@ end;
 
 procedure TLogoWorker.Execute;
 var
-  Url, Base, Path: string;
+  Url, Base, Path, RealUrl, Params: string;
+  MaxSz: Integer;
   D: TDoneItem;
   M: TLogoMaster;
   NeedNotify, Got: Boolean;
@@ -418,25 +490,35 @@ begin
       end;
       if Url = '' then Break;
 
-      Base := FDir + 'logo_' + HashStr(Url);
+      { 'P#ссылка' — постер фильма: заготовка крупнее }
+      RealUrl := Url;
+      MaxSz := MASTER_SIZE;
+      Params := PROXY_PARAMS;
+      if Copy(Url, 1, 2) = 'P#' then
+      begin
+        RealUrl := Copy(Url, 3, MaxInt);
+        MaxSz := POSTER_SIZE;
+        Params := POSTER_PARAMS;
+      end;
+      Base := FDir + 'logo_' + HashStr(RealUrl);
       Got := False;
       { 1) сохранённая копия }
-      M := TryMaster(FindCached(Base));
+      M := TryMaster(FindCached(Base), MaxSz);
       if M = nil then
       begin
         Path := FindCached(Base);
         if Path <> '' then DeleteFile(Path);   { испорченная или нечитаемая копия }
         { 2) напрямую, как браузер }
         if not FileExists(Base + '.fail') or UseProxy then
-          if DownloadImage(Url, Base, Path, Got) then
-            M := TryMaster(Path);
+          if DownloadImage(RealUrl, Base, Path, Got) then
+            M := TryMaster(Path, MaxSz);
         { 3) через сервис преобразования: WebP, SVG, ICO, HTTPS на старых Windows }
         if (M = nil) and UseProxy and not FileExists(Base + '.fail2') then
         begin
           Path := FindCached(Base);
           if Path <> '' then DeleteFile(Path);
-          if DownloadImage(PROXY_URL + UrlEnc(Url) + PROXY_PARAMS, Base, Path, Got) then
-            M := TryMaster(Path)
+          if DownloadImage(PROXY_URL + UrlEnc(RealUrl) + Params, Base, Path, Got) then
+            M := TryMaster(Path, MaxSz)
           else if Got then
             with TFileStream.Create(Base + '.fail2', fmCreate) do Free;
         end
@@ -574,6 +656,37 @@ begin
     Result := nil;
   end;
   FBitmaps.AddObject(Key, Result);   { nil — запоминаем неудачу }
+end;
+
+function TLogoCache.GetPoster(const Url: string; W, H: Integer; Bg: TColor): TBitmap;
+var
+  Key, MUrl: string;
+  i: Integer;
+  M: TLogoMaster;
+begin
+  Result := nil;
+  if Url = '' then Exit;
+  MUrl := 'P#' + Url;
+  Key := 'P' + IntToStr(W) + 'x' + IntToStr(H) + '#' + IntToHex(ColorToRGB(Bg), 6) + '#' + Url;
+  if FBitmaps.Find(Key, i) then
+    Exit(TBitmap(FBitmaps.Objects[i]));
+  if not FMasters.Find(MUrl, i) then
+  begin
+    if not FPending.Find(MUrl, i) then
+    begin
+      FPending.Add(MUrl);
+      FWorker.Request(MUrl);
+    end;
+    Exit;
+  end;
+  M := TLogoMaster(FMasters.Objects[i]);
+  if M <> nil then
+  try
+    Result := RenderPoster(M, W, H, Bg);
+  except
+    Result := nil;
+  end;
+  FBitmaps.AddObject(Key, Result);
 end;
 
 end.

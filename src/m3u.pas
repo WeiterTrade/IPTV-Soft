@@ -21,6 +21,7 @@ type
     Logo: string;
     LogoAlt: string;   { логотип по шаблону из настроек }
     LogoDb: string;    { логотип из базы по названию }
+    IsVod: Boolean;    { фильм / сериал, а не телеканал }
     Options: string;   { параметры VLC (#EXTVLCOPT), по одному на строку }
     CatchupType: string;    { архив: shift, append, default, flussonic, xc }
     CatchupSource: string;  { шаблон ссылки на архив }

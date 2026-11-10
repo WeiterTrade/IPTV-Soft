@@ -41,7 +41,7 @@ type
   TIconKind = (ikNone, ikPlay, ikStop, ikPrev, ikNext, ikVolume, ikMute,
     ikFullscreen, ikStar, ikPlus, ikMinus, ikRefresh, ikEdit, ikRecord,
     ikBack, ikChevron, ikViewList, ikViewCompact, ikViewGrid, ikViewTiles,
-    ikWinMin, ikWinMax, ikWinRestore, ikClose, ikSettings, ikExternal, ikUp, ikDown, ikWall);
+    ikWinMin, ikWinMax, ikWinRestore, ikClose, ikSettings, ikExternal, ikUp, ikDown, ikWall, ikPause);
 
   TFlatButton = class(TGraphicControl)
   private
@@ -117,6 +117,7 @@ type
     constructor Create(AOwner: TComponent); override;
     property Position: Integer read FPosition write SetPosition;
     property Max: Integer read FMax write FMax;
+    property Dragging: Boolean read FDragging;
     property OnChange: TNotifyEvent read FOnChange write FOnChange;
     property Align;
     property BorderSpacing;
@@ -356,6 +357,11 @@ begin
       begin
         C.Pen.Width := 2;
         C.Polyline([Point(cx - s, cy - s div 2), Point(cx, cy + s div 2), Point(cx + s, cy - s div 2)]);
+      end;
+    ikPause:
+      begin
+        C.Rectangle(cx - s + 1, cy - s, cx - 1, cy + s + 1);
+        C.Rectangle(cx + 2, cy - s, cx + s, cy + s + 1);
       end;
     ikWall:
       begin
