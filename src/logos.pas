@@ -13,6 +13,9 @@ uses
 
 const
   MASTER_SIZE = 72;   { размер заготовки, из которой делаются все остальные }
+  { открытый сервис преобразования картинок (WebP, SVG и др. -> PNG) }
+  PROXY_URL = 'https://images.weserv.nl/?url=';
+  PROXY_PARAMS = '&w=144&h=144&fit=inside&output=png';
 
 type
   { Уменьшенная копия логотипа с прозрачностью: RGBA, premultiplied }
@@ -37,6 +40,7 @@ type
     procedure Execute; override;
   public
     Owner: TLogoCache;   { используется только в основном потоке }
+    UseProxy: Boolean;
     constructor Create(const ADir: string);
     destructor Destroy; override;
     procedure Request(const Url: string);
@@ -64,6 +68,7 @@ type
     procedure ClearMemory;
     { забыть все логотипы (после очистки кэша на диске) }
     procedure Reset;
+    procedure SetUseProxy(V: Boolean);
   end;
 
 implementation
@@ -336,11 +341,63 @@ begin
   end;
 end;
 
+function UrlEnc(const S: string): string;
+var
+  i: Integer;
+begin
+  Result := '';
+  for i := 1 to Length(S) do
+    if S[i] in ['A'..'Z', 'a'..'z', '0'..'9', '-', '_', '.', '~'] then
+      Result := Result + S[i]
+    else
+      Result := Result + '%' + IntToHex(Ord(S[i]), 2);
+end;
+
+function TryMaster(const Path: string): TLogoMaster;
+begin
+  Result := nil;
+  if Path = '' then Exit;
+  try
+    Result := MakeMaster(Path);
+  except
+    Result := nil;
+  end;
+end;
+
+{ Скачать в Base+расширение; True — получилась картинка известного формата. }
+function DownloadImage(const Url, Base: string; out Path: string; out GotFile: Boolean): Boolean;
+var
+  Ext, Err: string;
+begin
+  Result := False;
+  Path := '';
+  GotFile := False;
+  if not FetchToFileUA(Url, Base + '.part', BROWSER_UA, Err) then
+  begin
+    if FileExists(Base + '.part') then DeleteFile(Base + '.part');
+    Exit;
+  end;
+  GotFile := True;
+  Ext := DetectExt(Base + '.part');
+  if Ext = '' then
+  begin
+    DeleteFile(Base + '.part');
+    Exit;
+  end;
+  if FileExists(Base + Ext) then DeleteFile(Base + Ext);
+  if RenameFile(Base + '.part', Base + Ext) then
+  begin
+    Path := Base + Ext;
+    Result := True;
+  end;
+end;
+
 procedure TLogoWorker.Execute;
 var
-  Url, Base, Path, Ext, Err: string;
+  Url, Base, Path: string;
   D: TDoneItem;
-  NeedNotify: Boolean;
+  M: TLogoMaster;
+  NeedNotify, Got: Boolean;
 begin
   MaskFloatExceptions;
   while not Terminated do
@@ -362,34 +419,34 @@ begin
       if Url = '' then Break;
 
       Base := FDir + 'logo_' + HashStr(Url);
-      Path := FindCached(Base);
-      if (Path = '') and not FileExists(Base + '.fail') then
+      Got := False;
+      { 1) сохранённая копия }
+      M := TryMaster(FindCached(Base));
+      if M = nil then
       begin
-        if FetchToFile(Url, Base + '.part', Err) then
+        Path := FindCached(Base);
+        if Path <> '' then DeleteFile(Path);   { испорченная или нечитаемая копия }
+        { 2) напрямую, как браузер }
+        if not FileExists(Base + '.fail') or UseProxy then
+          if DownloadImage(Url, Base, Path, Got) then
+            M := TryMaster(Path);
+        { 3) через сервис преобразования: WebP, SVG, ICO, HTTPS на старых Windows }
+        if (M = nil) and UseProxy and not FileExists(Base + '.fail2') then
         begin
-          Ext := DetectExt(Base + '.part');
-          if (Ext <> '') and RenameFile(Base + '.part', Base + Ext) then
-            Path := Base + Ext
-          else
-          begin
-            DeleteFile(Base + '.part');
-            { формат не поддерживается (например, SVG) — запоминаем }
-            with TFileStream.Create(Base + '.fail', fmCreate) do Free;
-          end;
+          Path := FindCached(Base);
+          if Path <> '' then DeleteFile(Path);
+          if DownloadImage(PROXY_URL + UrlEnc(Url) + PROXY_PARAMS, Base, Path, Got) then
+            M := TryMaster(Path)
+          else if Got then
+            with TFileStream.Create(Base + '.fail2', fmCreate) do Free;
         end
-        else if FileExists(Base + '.part') then
-          DeleteFile(Base + '.part');
+        else if (M = nil) and not UseProxy and Got then
+          with TFileStream.Create(Base + '.fail', fmCreate) do Free;
       end;
 
       D := TDoneItem.Create;
       D.Url := Url;
-      D.Master := nil;
-      if Path <> '' then
-      try
-        D.Master := MakeMaster(Path);
-      except
-        D.Master := nil;
-      end;
+      D.Master := M;
 
       FLock.Enter;
       try
@@ -440,6 +497,11 @@ end;
 procedure TLogoCache.ClearMemory;
 begin
   FBitmaps.Clear;
+end;
+
+procedure TLogoCache.SetUseProxy(V: Boolean);
+begin
+  FWorker.UseProxy := V;
 end;
 
 procedure TLogoCache.Reset;

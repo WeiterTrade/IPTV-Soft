@@ -56,6 +56,7 @@ type
     EpgPastDays: Integer;        { сколько дней прошедшей программы хранить (архив) }
     DefaultCatchup: Integer;     { тип архива, если в плейлисте не указан (индекс CATCHUP_NAMES) }
     LogoDbEnabled: Boolean;      { подбирать логотипы по названию из базы iptv-org }
+    LogoProxy: Boolean;          { преобразовывать неподдерживаемые логотипы через images.weserv.nl }
     LogoTemplate: string;        // свой источник логотипов: ссылка с подстановкой name или id в фигурных скобках
     { окно }
     SideWidth: Integer;
@@ -156,6 +157,7 @@ begin
   EpgPastDays := 7;
   DefaultCatchup := 0;
   LogoDbEnabled := True;
+  LogoProxy := True;
   SideWidth := 360;
   InfoHeight := 80;
   WinWidth := 1180;
@@ -226,6 +228,7 @@ begin
   EpgPastDays := Ini.ReadInteger('Epg', 'PastDays', EpgPastDays);
   DefaultCatchup := Ini.ReadInteger('Epg', 'DefaultCatchup', DefaultCatchup);
   LogoDbEnabled := Ini.ReadBool('Logos', 'UseDatabase', LogoDbEnabled);
+  LogoProxy := Ini.ReadBool('Logos', 'UseProxy', LogoProxy);
   LogoTemplate := Ini.ReadString('Logos', 'Template', LogoTemplate);
 
   if WithWindow then
@@ -297,6 +300,7 @@ begin
   Ini.WriteInteger('Epg', 'PastDays', EpgPastDays);
   Ini.WriteInteger('Epg', 'DefaultCatchup', DefaultCatchup);
   Ini.WriteBool('Logos', 'UseDatabase', LogoDbEnabled);
+  Ini.WriteBool('Logos', 'UseProxy', LogoProxy);
   Ini.WriteString('Logos', 'Template', LogoTemplate);
 
   if WithWindow then

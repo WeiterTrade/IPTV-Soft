@@ -86,7 +86,7 @@ type
     { настройки внутри окна и база логотипов }
     pgSettings: TSettingsPage;
     FSettingsOpen: Boolean;
-    FSettingsOldFrame: Boolean;
+    FSettingsOldFrame, FSettingsOldProxy: Boolean;
     FLogoDb: TLogoDb;
     FLogoDbLoading: Boolean;
     { разное }
@@ -174,6 +174,7 @@ type
     procedure StopRecording(const Reason: string);
     procedure OpenSettings(Page: Integer);
     procedure CloseSettings;
+    procedure PlaceSettings;
     procedure ApplyAfterImport;
     procedure ResolveLogos;
     procedure StartLogoDb;
@@ -621,6 +622,7 @@ begin
 
   Log('настройки: ' + FSettings.ConfigDir);
   FLogos := TLogoCache.Create(FSettings.CacheDir);
+  FLogos.SetUseProxy(FSettings.LogoProxy);
 
   Log('построение интерфейса');
   BuildFrame;
@@ -2267,33 +2269,56 @@ end;
 { ====================================================================== }
 { настройки }
 
+{ Страница настроек открывается поверх основной части окна (ниже заголовка),
+  остальные панели не прячутся и не перестраиваются. }
+procedure TMainForm.PlaceSettings;
+var
+  T: Integer;
+begin
+  if pgSettings = nil then Exit;
+  T := 0;
+  if pnlTitle.Visible then T := pnlTitle.Top + pnlTitle.Height;
+  pgSettings.SetBounds(0, T, pnlRoot.ClientWidth, Math.Max(100, pnlRoot.ClientHeight - T));
+end;
+
 procedure TMainForm.OpenSettings(Page: Integer);
 begin
-  if FFullscreen then SetFullscreen(False);
-  if FWall then SetChannelWall(False);
-  if pgSettings = nil then
-  begin
-    pgSettings := TSettingsPage.CreatePage(Self, FSettings);
-    pgSettings.Parent := pnlRoot;
-    pgSettings.Align := alClient;
-    pgSettings.Visible := False;
-    pgSettings.OnClose := @SettingsPageClose;
-    pgSettings.OnImported := @SettingsPageImported;
-    pgSettings.OnClearLogos := @SettingsClearLogos;
+  try
+    if FFullscreen then SetFullscreen(False);
+    if FWall then SetChannelWall(False);
+    if pgSettings = nil then
+    begin
+      Log('создание страницы настроек');
+      pgSettings := TSettingsPage.CreatePage(Self, FSettings);
+      pgSettings.Visible := False;
+      pgSettings.Align := alNone;
+      pgSettings.Parent := pnlRoot;
+      pgSettings.OnClose := @SettingsPageClose;
+      pgSettings.OnImported := @SettingsPageImported;
+      pgSettings.OnClearLogos := @SettingsClearLogos;
+    end;
+    if not FSettingsOpen then
+    begin
+      FSettingsOldFrame := FSettings.SystemFrame;
+      FSettingsOldProxy := FSettings.LogoProxy;
+      pgSettings.LoadValues;
+    end;
+    pgSettings.ShowSection(Page);
+    FSettingsOpen := True;
+    PlaceSettings;
+    { окно видео прячем, чтобы оно не просвечивало поверх настроек }
+    if FSlot >= 0 then FSlots[FSlot].Visible := False;
+    pgSettings.Visible := True;
+    pgSettings.BringToFront;
+    btnMenuSettings.Checked := True;
+  except
+    on E: Exception do
+    begin
+      FSettingsOpen := False;
+      if pgSettings <> nil then pgSettings.Visible := False;
+      ReportFatal(E, 'Открытие настроек');
+    end;
   end;
-  if not FSettingsOpen then
-  begin
-    FSettingsOldFrame := FSettings.SystemFrame;
-    pgSettings.LoadValues;
-  end;
-  pgSettings.ShowSection(Page);
-  FSettingsOpen := True;
-  pnlSide.Visible := False;
-  splSide.Visible := False;
-  pnlMain.Visible := False;
-  pgSettings.Visible := True;
-  pgSettings.BringToFront;
-  btnMenuSettings.Checked := True;
 end;
 
 procedure TMainForm.CloseSettings;
@@ -2301,13 +2326,11 @@ begin
   if not FSettingsOpen then Exit;
   FSettingsOpen := False;
   pgSettings.Visible := False;
-  pnlSide.Visible := True;
-  pnlMain.Visible := True;
-  splSide.Visible := True;
-  splSide.Left := pnlSide.Left + pnlSide.Width + 1;
+  if FSlot >= 0 then FSlots[FSlot].Visible := True;
   btnMenuSettings.Checked := False;
-  UpdateSideMax;
   ApplyViewSettings;
+  FLogos.SetUseProxy(FSettings.LogoProxy);
+  if FSettings.LogoProxy <> FSettingsOldProxy then FLogos.Reset;
   if FPlaylist <> nil then LoadEpg(False);
   ApplyFilter;
   if FSettings.LogoDbEnabled then StartLogoDb;
@@ -3202,6 +3225,7 @@ var
 begin
   if WindowState = wsMinimized then Exit;
   UpdateSideMax;
+  if FSettingsOpen then PlaceSettings;
   if (pnlBottom <> nil) and (pnlMain <> nil) and pnlBottom.Visible then
   begin
     M := pnlMain.ClientHeight - 140;

@@ -45,7 +45,7 @@ type
     sePastDays: TSpinEdit;
     cbCatchup: TComboBox;
     { логотипы }
-    tgLogoDb: TToggle;
+    tgLogoDb, tgLogoProxy: TToggle;
     edLogoTpl: TEdit;
 
     function NewPage(Index: Integer; const ATitle: string; AKind: TIconKind): TPanel;
@@ -98,6 +98,7 @@ const
 begin
   inherited Create(AOwner);
   FS := S;
+  SetBounds(0, 0, 1280, 800);   { разумный размер до показа — иначе раскладка ломается }
   BevelOuter := bvNone;
   Color := clrBg;
   ParentColor := False;
@@ -372,7 +373,12 @@ begin
   tgLogoDb := AddToggle(P, 'Подбирать недостающие логотипы по названию канала', X0, Y);
   AddLabel(P, 'Если в плейлисте логотипа нет или он не открывается (SVG, WebP), программа ищет его ' +
     'по названию в открытой базе iptv-org. База обновляется раз в неделю.', X0 + 50, Y + 30, COL_W - 50, True);
-  Inc(Y, 90);
+  Inc(Y, 84);
+  tgLogoProxy := AddToggle(P, 'Открывать любые форматы логотипов (WebP, SVG, ICO)', X0, Y);
+  AddLabel(P, 'Логотипы, которые программа не может открыть сама или не может скачать (например, ' +
+    'по HTTPS на старой Windows), преобразуются в PNG открытым сервисом images.weserv.nl.',
+    X0 + 50, Y + 30, COL_W - 50, True);
+  Inc(Y, 84);
   AddLabel(P, 'Свой источник логотипов (необязательно)', X0, Y, 0, False, True);
   edLogoTpl := AddEdit(P, X0, Y + 28, COL_W);
   edLogoTpl.TextHint := 'https://example.com/logos/{name}.png';
@@ -430,6 +436,7 @@ begin
   sePastDays.Value := FS.EpgPastDays;
   cbCatchup.ItemIndex := FS.DefaultCatchup;
   tgLogoDb.Checked := FS.LogoDbEnabled;
+  tgLogoProxy.Checked := FS.LogoProxy;
   edLogoTpl.Text := FS.LogoTemplate;
 end;
 
@@ -453,6 +460,7 @@ begin
   FS.EpgPastDays := sePastDays.Value;
   if cbCatchup.ItemIndex >= 0 then FS.DefaultCatchup := cbCatchup.ItemIndex;
   FS.LogoDbEnabled := tgLogoDb.Checked;
+  FS.LogoProxy := tgLogoProxy.Checked;
   FS.LogoTemplate := Trim(edLogoTpl.Text);
   FS.Save;
 end;

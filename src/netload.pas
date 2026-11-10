@@ -10,6 +10,11 @@ interface
 function IsRemoteUrl(const S: string): Boolean;
 { Скачивает Source (ссылка или путь к файлу) в DestFile. }
 function FetchToFile(const Source, DestFile: string; out ErrorMsg: string): Boolean;
+{ То же, но со своим заголовком User-Agent (например, «как браузер» для картинок). }
+function FetchToFileUA(const Source, DestFile, UA: string; out ErrorMsg: string): Boolean;
+
+const
+  BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
 
 implementation
 
@@ -97,7 +102,7 @@ function InternetSetOptionW(hInet: HINTERNET; dwOption: DWORD; lpBuffer: Pointer
 function HttpQueryInfoW(hRequest: HINTERNET; dwInfoLevel: DWORD; lpBuffer: Pointer;
   var lpdwBufferLength: DWORD; var lpdwIndex: DWORD): BOOL; stdcall; external 'wininet.dll';
 
-function HttpDownload(const URL, Dest: string; out ErrorMsg: string): Boolean;
+function HttpDownload(const URL, Dest, UA: string; out ErrorMsg: string): Boolean;
 var
   hNet, hUrl: HINTERNET;
   Buf: array[0..32767] of Byte;
@@ -107,7 +112,7 @@ var
 begin
   Result := False;
   ErrorMsg := '';
-  hNet := InternetOpenW(PWideChar(UnicodeString(USER_AGENT)), INTERNET_OPEN_TYPE_PRECONFIG, nil, nil, 0);
+  hNet := InternetOpenW(PWideChar(UnicodeString(UA)), INTERNET_OPEN_TYPE_PRECONFIG, nil, nil, 0);
   if hNet = nil then
   begin
     ErrorMsg := 'WinINet недоступен (код ' + IntToStr(GetLastError) + ')';
@@ -163,7 +168,7 @@ begin
   end;
 end;
 {$ELSE}
-function HttpDownload(const URL, Dest: string; out ErrorMsg: string): Boolean;
+function HttpDownload(const URL, Dest, UA: string; out ErrorMsg: string): Boolean;
 var
   Outp: string;
 begin
@@ -171,13 +176,13 @@ begin
   ErrorMsg := '';
   try
     Result := RunCommand('curl', ['-fsSL', '--compressed', '--connect-timeout', '20',
-      '--max-time', '900', '-A', USER_AGENT, '-o', Dest, URL], Outp);
+      '--max-time', '900', '-A', UA, '-o', Dest, URL], Outp);
   except
     Result := False;
   end;
   if not Result then
   try
-    Result := RunCommand('wget', ['-q', '-T', '60', '-U', USER_AGENT, '-O', Dest, URL], Outp);
+    Result := RunCommand('wget', ['-q', '-T', '60', '-U', UA, '-O', Dest, URL], Outp);
   except
     Result := False;
   end;
@@ -188,8 +193,13 @@ end;
 
 function FetchToFile(const Source, DestFile: string; out ErrorMsg: string): Boolean;
 begin
+  Result := FetchToFileUA(Source, DestFile, USER_AGENT, ErrorMsg);
+end;
+
+function FetchToFileUA(const Source, DestFile, UA: string; out ErrorMsg: string): Boolean;
+begin
   if IsRemoteUrl(Source) then
-    Result := HttpDownload(Trim(Source), DestFile, ErrorMsg)
+    Result := HttpDownload(Trim(Source), DestFile, UA, ErrorMsg)
   else
     Result := CopyLocal(LocalPath(Source), DestFile, ErrorMsg);
   if Result and FileExists(DestFile) then
