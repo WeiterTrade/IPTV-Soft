@@ -21,7 +21,7 @@ uses
 type
   TMenuPainter = class
     procedure Measure(Sender: TObject; ACanvas: TCanvas; var AWidth, AHeight: Integer);
-    procedure Draw(Sender: TObject; ACanvas: TCanvas; ARect: TRect; AState: TOwnerDrawState);
+    procedure Draw(Sender: TObject; ACanvas: TCanvas; ARect: Types.TRect; AState: LCLType.TOwnerDrawState);
   end;
 
 var
@@ -69,7 +69,7 @@ begin
   AHeight := Sc(30);
 end;
 
-procedure TMenuPainter.Draw(Sender: TObject; ACanvas: TCanvas; ARect: TRect; AState: TOwnerDrawState);
+procedure TMenuPainter.Draw(Sender: TObject; ACanvas: TCanvas; ARect: Types.TRect; AState: LCLType.TOwnerDrawState);
 var
   Mi: TMenuItem;
   Y, X, H: Integer;
