@@ -9,7 +9,7 @@ uses
   Classes, SysUtils, Types, Forms, Controls, Graphics, StdCtrls, ExtCtrls,
   Menus, Dialogs, LCLType, Clipbrd, Math, LazUTF8, FileUtil, Process,
   m3u, epg, vlcdyn, netload, appsettings, widgets, playlistdlg, videohost,
-  channelview, logos, winframe, settingsdlg, applog, guideview, catchup;
+  channelview, logos, winframe, settingspage, applog, guideview, catchup, logodb;
 
 type
   TLoadKind = (lkPlaylist, lkEpg);
@@ -24,6 +24,9 @@ type
     Sources: TStringList;
     Want: TStringList;       { каналы плейлиста: id#1tvg-name#1имя }
     PastDays: Integer;
+    CacheOnly: Boolean;      { только прочитать сохранённую копию плейлиста }
+    Refresh: Boolean;        { фоновое обновление после показа копии }
+    Unchanged: Boolean;      { плейлист на сервере не изменился }
     CacheDir: string;
     Force: Boolean;
     Generation: Integer;
@@ -80,6 +83,12 @@ type
     FWallPrevMode: TViewMode;
     FWallSideWidth: Integer;
     FAlignOff: Boolean;
+    { настройки внутри окна и база логотипов }
+    pgSettings: TSettingsPage;
+    FSettingsOpen: Boolean;
+    FSettingsOldFrame: Boolean;
+    FLogoDb: TLogoDb;
+    FLogoDbLoading: Boolean;
     { разное }
     FPlGen, FEpgGen: Integer;
     FUpdating, FAutoPlayDone, FForceEpg, FShown: Boolean;
@@ -94,7 +103,8 @@ type
     FSlots: array[0..3] of TPanel;   { отдельная область видео для каждого плеера }
     FSlot: Integer;
     splInfo: TSplitter;
-    pbTitle, pbInfo: TPaintBox;
+    pbTitle, pbInfo, pbLogo: TPaintBox;
+    btnMenuSettings: TFlatButton;
     btnWinMin, btnWinMax, btnWinClose: TFlatButton;
     splSide: TSplitter;
     segTabs: TSegmentBar;
@@ -163,6 +173,11 @@ type
     procedure StartRecording(Ch: TChannel);
     procedure StopRecording(const Reason: string);
     procedure OpenSettings(Page: Integer);
+    procedure CloseSettings;
+    procedure ApplyAfterImport;
+    procedure ResolveLogos;
+    procedure StartLogoDb;
+    procedure LoadPlaylistRefresh(Index: Integer);
     function IsFav(Ch: TChannel): Boolean;
     function TargetChannel: TChannel;
 
@@ -193,6 +208,11 @@ type
     procedure MuteClick(Sender: TObject);
     procedure FullClick(Sender: TObject);
     procedure SettingsClick(Sender: TObject);
+    procedure SettingsPageClose(Sender: TObject);
+    procedure SettingsPageImported(Sender: TObject);
+    procedure SettingsClearLogos(Sender: TObject);
+    procedure LogoDbDone(Sender: TObject);
+    procedure LogoPaint(Sender: TObject);
     procedure VolumeChange(Sender: TObject);
     procedure PlaylistChange(Sender: TObject);
     procedure SearchChange(Sender: TObject);
@@ -360,6 +380,48 @@ begin
   Result := '';
 end;
 
+function FilesEqual(const A, B: string): Boolean;
+var
+  FA, FB: TFileStream;
+  BufA, BufB: array[0..16383] of Byte;
+  NA, NB: Integer;
+begin
+  Result := False;
+  try
+    FA := TFileStream.Create(A, fmOpenRead or fmShareDenyNone);
+    try
+      FB := TFileStream.Create(B, fmOpenRead or fmShareDenyNone);
+      try
+        if FA.Size <> FB.Size then Exit;
+        repeat
+          NA := FA.Read(BufA, SizeOf(BufA));
+          NB := FB.Read(BufB, SizeOf(BufB));
+          if (NA <> NB) or not CompareMem(@BufA[0], @BufB[0], NA) then Exit;
+        until NA = 0;
+        Result := True;
+      finally
+        FB.Free;
+      end;
+    finally
+      FA.Free;
+    end;
+  except
+    Result := False;
+  end;
+end;
+
+function UrlEncode(const S: string): string;
+var
+  i: Integer;
+begin
+  Result := '';
+  for i := 1 to Length(S) do
+    if S[i] in ['A'..'Z', 'a'..'z', '0'..'9', '-', '_', '.', '~'] then
+      Result := Result + S[i]
+    else
+      Result := Result + '%' + IntToHex(Ord(S[i]), 2);
+end;
+
 { ====================================================================== }
 { TLoaderThread }
 
@@ -421,7 +483,33 @@ begin
     if Kind = lkPlaylist then
     begin
       Cache := CacheDir + 'pl_' + HashStr(Source) + '.m3u';
-      if not Fetch(Source, Cache, 0, Err) then
+      if CacheOnly then
+      begin
+        if not FileExists(Cache) then
+        begin
+          ErrorMsg := 'нет сохранённой копии';
+          Exit;
+        end;
+      end
+      else if Refresh then
+      begin
+        if not FetchToFile(Source, Cache + '.part', Err) then
+        begin
+          if FileExists(Cache + '.part') then DeleteFile(Cache + '.part');
+          ErrorMsg := Err;
+          Exit;
+        end;
+        if FileExists(Cache) and FilesEqual(Cache + '.part', Cache) then
+        begin
+          DeleteFile(Cache + '.part');
+          Unchanged := True;
+          Ok := True;
+          Exit;
+        end;
+        if FileExists(Cache) then DeleteFile(Cache);
+        RenameFile(Cache + '.part', Cache);
+      end
+      else if not Fetch(Source, Cache, 0, Err) then
       begin
         ErrorMsg := Err;
         Exit;
@@ -586,6 +674,7 @@ begin
   end;
   if chView <> nil then chView.Logos := nil;
   FLogos.Free;
+  FLogoDb.Free;
   FView.Free;
   FPlaylist.Free;
   FEpg.Free;
@@ -653,6 +742,21 @@ begin
   btnWinMin.Width := 46;
   btnWinMin.BorderSpacing.Around := 0;
   btnWinMin.Left := 2800;
+
+  { слева: знак и название, затем пункты меню }
+  pbLogo := TPaintBox.Create(Self);
+  pbLogo.Parent := pnlTitle;
+  pbLogo.Width := 190;
+  pbLogo.Left := 0;
+  pbLogo.Align := alLeft;
+  pbLogo.OnPaint := @LogoPaint;
+  pbLogo.OnMouseDown := @TitleMouseDown;
+  btnMenuSettings := MakeButton(pnlTitle, ikSettings, alLeft, 'Настройки программы', @SettingsClick);
+  btnMenuSettings.Caption := 'Настройки';
+  btnMenuSettings.NavStyle := True;
+  btnMenuSettings.Width := 130;
+  btnMenuSettings.Left := 300;
+  btnMenuSettings.BorderSpacing.Around := 2;
 
   pbTitle := TPaintBox.Create(Self);
   pbTitle.Parent := pnlTitle;
@@ -1137,18 +1241,16 @@ end;
 { ====================================================================== }
 { окно: заголовок, рамка, развернуть, полный экран }
 
-procedure TMainForm.TitlePaint(Sender: TObject);
+procedure TMainForm.LogoPaint(Sender: TObject);
 var
   C: TCanvas;
-  X, Y, H, TW: Integer;
-  S: string;
+  X, Y, H: Integer;
 begin
-  C := pbTitle.Canvas;
-  H := pbTitle.Height;
+  C := pbLogo.Canvas;
+  H := pbLogo.Height;
   C.Brush.Style := bsSolid;
   C.Brush.Color := clrTitle;
-  C.FillRect(Rect(0, 0, pbTitle.Width, H));
-  { знак программы }
+  C.FillRect(Rect(0, 0, pbLogo.Width, H));
   X := 12;
   Y := (H - 22) div 2;
   C.Brush.Color := clrAccent;
@@ -1157,21 +1259,32 @@ begin
   C.Brush.Color := clrTitle;
   C.Pen.Color := clrTitle;
   C.Polygon([Point(X + 8, Y + 6), Point(X + 8, Y + 16), Point(X + 16, Y + 11)]);
-  { название }
   C.Brush.Style := bsClear;
   C.Font.Assign(Font);
   C.Font.Size := 10;
   C.Font.Style := [fsBold];
   C.Font.Color := clrText;
-  S := 'IPTV Aristocrat';
-  C.TextOut(X + 32, (H - C.TextHeight(S)) div 2, S);
-  TW := C.TextWidth(S);
+  C.TextOut(X + 32, (H - C.TextHeight('Ag')) div 2, 'IPTV Aristocrat');
+end;
+
+procedure TMainForm.TitlePaint(Sender: TObject);
+var
+  C: TCanvas;
+  H: Integer;
+begin
+  C := pbTitle.Canvas;
+  H := pbTitle.Height;
+  C.Brush.Style := bsSolid;
+  C.Brush.Color := clrTitle;
+  C.FillRect(Rect(0, 0, pbTitle.Width, H));
   if FCurrent <> nil then
   begin
+    C.Brush.Style := bsClear;
+    C.Font.Assign(Font);
+    C.Font.Size := 10;
     C.Font.Style := [];
     C.Font.Color := clrDim;
-    C.TextOut(X + 32 + TW + 14, (H - C.TextHeight('Ag')) div 2,
-      Ellipsize(C, FCurrent.Name, pbTitle.Width - X - 32 - TW - 30));
+    C.TextOut(20, (H - C.TextHeight('Ag')) div 2, Ellipsize(C, FCurrent.Name, pbTitle.Width - 40));
   end;
 end;
 
@@ -1370,7 +1483,25 @@ begin
   T.CacheDir := FSettings.CacheDir;
   T.Generation := FPlGen;
   T.OnTerminate := @LoaderDone;
-  SetInfo('Загрузка плейлиста...');
+  { есть сохранённая копия — показываем её сразу, а обновляем в фоне }
+  T.CacheOnly := (not ForceEpg) and IsRemoteUrl(T.Source) and
+    FileExists(FSettings.CacheDir + 'pl_' + HashStr(T.Source) + '.m3u');
+  if T.CacheOnly then SetInfo('') else SetInfo('Загрузка плейлиста...');
+  T.Start;
+end;
+
+procedure TMainForm.LoadPlaylistRefresh(Index: Integer);
+var
+  T: TLoaderThread;
+begin
+  if (Index < 0) or (Index >= FSettings.PlaylistCount) then Exit;
+  T := TLoaderThread.Create;
+  T.Kind := lkPlaylist;
+  T.Source := FSettings.Playlist(Index).Source;
+  T.CacheDir := FSettings.CacheDir;
+  T.Generation := FPlGen;
+  T.Refresh := True;
+  T.OnTerminate := @LoaderDone;
   T.Start;
 end;
 
@@ -1441,6 +1572,7 @@ var
   T: TLoaderThread;
   Ch: TChannel;
   Force: Boolean;
+  GuideUrl: string;
 begin
   if not GFormAlive then Exit;
   T := TLoaderThread(Sender);
@@ -1448,12 +1580,29 @@ begin
   if T.Kind = lkPlaylist then
   begin
     if T.Generation <> FPlGen then Exit;
+    if T.Refresh then
+    begin
+      { фоновое обновление: без интернета просто остаёмся на сохранённой копии }
+      if not T.Ok then
+      begin
+        SetInfo('Нет связи — показан сохранённый плейлист');
+        Exit;
+      end;
+      if T.Unchanged then Exit;
+    end;
     if not T.Ok then
     begin
+      if T.CacheOnly then
+      begin
+        LoadPlaylist(FSettings.LastPlaylist, True);
+        Exit;
+      end;
       SetInfo('');
       MessageDlg('Не удалось загрузить плейлист:' + LineEnding + T.ErrorMsg, mtError, [mbOK], 0);
       Exit;
     end;
+    GuideUrl := '';
+    if FGuideOpen and (FGuideChannel <> nil) then GuideUrl := FGuideChannel.URL;
     CloseGuide;
     FView.Clear;
     chView.SetChannels(nil);
@@ -1464,13 +1613,16 @@ begin
     T.Playlist := nil;
     if FPlaying then FCurrent := FPlaylist.FindByUrl(FCurrentUrl);
     chView.Current := FCurrent;
-    FInCategory := False;
+    if not T.Refresh then FInCategory := False;
     ApplyFilter;
+    ResolveLogos;
+    if GuideUrl <> '' then OpenGuide(FPlaylist.FindByUrl(GuideUrl));
     SetInfo(T.Warning);
 
     Force := FForceEpg;
     FForceEpg := False;
     LoadEpg(Force);
+    if T.CacheOnly then LoadPlaylistRefresh(FSettings.LastPlaylist);
 
     if not FAutoPlayDone then
     begin
@@ -2116,36 +2268,159 @@ end;
 { настройки }
 
 procedure TMainForm.OpenSettings(Page: Integer);
-var
-  R: TSettingsResult;
-  OldFrame: Boolean;
 begin
-  OldFrame := FSettings.SystemFrame;
-  R := ShowSettings(Self, FSettings, Page);
-  if R = srCancel then Exit;
-  ApplyViewSettings;
-  if R = srImported then
+  if FFullscreen then SetFullscreen(False);
+  if FWall then SetChannelWall(False);
+  if pgSettings = nil then
   begin
-    sldVolume.Position := FSettings.Volume;
-    if FSettings.Muted then btnMute.Kind := ikMute else btnMute.Kind := ikVolume;
-    segTabs.ItemIndex := FSettings.LastTab;
-    FInCategory := False;
-    RefreshPlaylistCombo;
-    if FSettings.PlaylistCount > 0 then
-      LoadPlaylist(cbPlaylists.ItemIndex, False)
-    else
-    begin
-      FreeAndNil(FPlaylist);
-      ApplyFilter;
-    end;
-  end
+    pgSettings := TSettingsPage.CreatePage(Self, FSettings);
+    pgSettings.Parent := pnlRoot;
+    pgSettings.Align := alClient;
+    pgSettings.Visible := False;
+    pgSettings.OnClose := @SettingsPageClose;
+    pgSettings.OnImported := @SettingsPageImported;
+    pgSettings.OnClearLogos := @SettingsClearLogos;
+  end;
+  if not FSettingsOpen then
+  begin
+    FSettingsOldFrame := FSettings.SystemFrame;
+    pgSettings.LoadValues;
+  end;
+  pgSettings.ShowSection(Page);
+  FSettingsOpen := True;
+  pnlSide.Visible := False;
+  splSide.Visible := False;
+  pnlMain.Visible := False;
+  pgSettings.Visible := True;
+  pgSettings.BringToFront;
+  btnMenuSettings.Checked := True;
+end;
+
+procedure TMainForm.CloseSettings;
+begin
+  if not FSettingsOpen then Exit;
+  FSettingsOpen := False;
+  pgSettings.Visible := False;
+  pnlSide.Visible := True;
+  pnlMain.Visible := True;
+  splSide.Visible := True;
+  splSide.Left := pnlSide.Left + pnlSide.Width + 1;
+  btnMenuSettings.Checked := False;
+  UpdateSideMax;
+  ApplyViewSettings;
+  if FPlaylist <> nil then LoadEpg(False);
+  ApplyFilter;
+  if FSettings.LogoDbEnabled then StartLogoDb;
+  ResolveLogos;
+  if FSettings.SystemFrame <> FSettingsOldFrame then
+    MessageDlg('Вид рамки окна изменится после перезапуска программы.', mtInformation, [mbOK], 0);
+end;
+
+procedure TMainForm.SettingsPageClose(Sender: TObject);
+begin
+  CloseSettings;
+end;
+
+procedure TMainForm.ApplyAfterImport;
+begin
+  ApplyViewSettings;
+  sldVolume.Position := FSettings.Volume;
+  if FSettings.Muted then btnMute.Kind := ikMute else btnMute.Kind := ikVolume;
+  segTabs.ItemIndex := FSettings.LastTab;
+  FInCategory := False;
+  RefreshPlaylistCombo;
+  if FSettings.PlaylistCount > 0 then
+    LoadPlaylist(cbPlaylists.ItemIndex, True)
   else
   begin
-    if FPlaylist <> nil then LoadEpg(False);
+    CloseGuide;
+    FreeAndNil(FPlaylist);
     ApplyFilter;
   end;
-  if FSettings.SystemFrame <> OldFrame then
-    MessageDlg('Вид рамки окна изменится после перезапуска программы.', mtInformation, [mbOK], 0);
+end;
+
+procedure TMainForm.SettingsPageImported(Sender: TObject);
+begin
+  ApplyAfterImport;
+end;
+
+procedure TMainForm.SettingsClearLogos(Sender: TObject);
+var
+  SR: TSearchRec;
+  Dir: string;
+begin
+  Dir := FSettings.CacheDir + 'logos' + PathDelim;
+  if FindFirst(Dir + '*', faAnyFile, SR) = 0 then
+  try
+    repeat
+      if (SR.Attr and faDirectory) = 0 then DeleteFile(Dir + SR.Name);
+    until FindNext(SR) <> 0;
+  finally
+    FindClose(SR);
+  end;
+  FLogos.Reset;
+  chView.Invalidate;
+  pbInfo.Invalidate;
+end;
+
+{ ---------- база логотипов по названию ---------- }
+
+procedure TMainForm.StartLogoDb;
+var
+  T: TLogoDbLoader;
+begin
+  if (FLogoDb <> nil) or FLogoDbLoading or not FSettings.LogoDbEnabled then Exit;
+  FLogoDbLoading := True;
+  T := TLogoDbLoader.Create(FSettings.CacheDir);
+  T.OnTerminate := @LogoDbDone;
+  T.Start;
+end;
+
+procedure TMainForm.LogoDbDone(Sender: TObject);
+var
+  T: TLogoDbLoader;
+begin
+  if not GFormAlive then Exit;
+  T := TLogoDbLoader(Sender);
+  FLogoDbLoading := False;
+  if T.Db <> nil then
+  begin
+    FreeAndNil(FLogoDb);
+    FLogoDb := T.Db;
+    T.Db := nil;
+    ResolveLogos;
+  end
+  else if T.ErrorMsg <> '' then
+    Log('база логотипов: ' + T.ErrorMsg);
+end;
+
+procedure TMainForm.ResolveLogos;
+var
+  i: Integer;
+  Ch: TChannel;
+  Tpl, U: string;
+begin
+  if FPlaylist = nil then Exit;
+  Tpl := Trim(FSettings.LogoTemplate);
+  for i := 0 to FPlaylist.Count - 1 do
+  begin
+    Ch := FPlaylist.Get(i);
+    if Tpl <> '' then
+    begin
+      U := StringReplace(Tpl, '{name}', UrlEncode(Ch.Name), [rfReplaceAll]);
+      U := StringReplace(U, '{key}', UrlEncode(LogoKey(Ch.Name)), [rfReplaceAll]);
+      U := StringReplace(U, '{id}', UrlEncode(Ch.TvgId), [rfReplaceAll]);
+      Ch.LogoAlt := U;
+    end
+    else
+      Ch.LogoAlt := '';
+    if FSettings.LogoDbEnabled and (FLogoDb <> nil) then
+      Ch.LogoDb := FLogoDb.Find(Ch.TvgName, Ch.Name)
+    else
+      Ch.LogoDb := '';
+  end;
+  chView.Invalidate;
+  pbInfo.Invalidate;
 end;
 
 { ====================================================================== }
@@ -2165,6 +2440,7 @@ begin
   ApplyFilter;
   if FSettings.PlaylistCount > 0 then
     LoadPlaylist(cbPlaylists.ItemIndex, False);
+  StartLogoDb;
 end;
 
 procedure TMainForm.FormClose(Sender: TObject; var CloseAction: TCloseAction);
@@ -2211,6 +2487,7 @@ var
   InEdit: Boolean;
 begin
   InEdit := ActiveControl = edSearch;
+  if FSettingsOpen and (Key <> VK_ESCAPE) then Exit;
   if ssCtrl in Shift then
   begin
     case Key of
@@ -2240,7 +2517,13 @@ begin
         Key := 0;
       end;
     VK_ESCAPE:
-      if FFullscreen then
+      if FSettingsOpen then
+      begin
+        pgSettings.SaveValues;
+        CloseSettings;
+        Key := 0;
+      end
+      else if FFullscreen then
       begin
         SetFullscreen(False);
         Key := 0;
@@ -2599,12 +2882,12 @@ begin
   end;
 
   { логотип }
-  if FSettings.ShowLogos and (FCurrent.Logo <> '') then
+  if FSettings.ShowLogos then
   begin
     LS := Math.Min(H - 16, 60);
     if LS >= 16 then
     begin
-      B := FLogos.Get(FCurrent.Logo, LS, clrBg);
+      B := ChannelLogo(FLogos, FCurrent, LS, clrBg);
       if B <> nil then
       begin
         C.Draw(X, 8, B);

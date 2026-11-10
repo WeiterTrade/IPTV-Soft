@@ -100,8 +100,28 @@ type
   end;
 
 function Ellipsize(C: TCanvas; const S: string; MaxW: Integer): string;
+{ Логотип канала: своя ссылка из плейлиста, затем шаблон, затем база по названию. }
+function ChannelLogo(Logos: TLogoCache; Ch: TChannel; Size: Integer; Bg: TColor): TBitmap;
 
 implementation
+
+function ChannelLogo(Logos: TLogoCache; Ch: TChannel; Size: Integer; Bg: TColor): TBitmap;
+begin
+  Result := nil;
+  if (Logos = nil) or (Ch = nil) then Exit;
+  if Ch.Logo <> '' then
+  begin
+    Result := Logos.Get(Ch.Logo, Size, Bg);
+    if (Result <> nil) or not Logos.IsFailed(Ch.Logo) then Exit;
+  end;
+  if Ch.LogoAlt <> '' then
+  begin
+    Result := Logos.Get(Ch.LogoAlt, Size, Bg);
+    if (Result <> nil) or not Logos.IsFailed(Ch.LogoAlt) then Exit;
+  end;
+  if Ch.LogoDb <> '' then
+    Result := Logos.Get(Ch.LogoDb, Size, Bg);
+end;
 
 const
   SB_W = 10;     { зона полосы прокрутки }
@@ -417,9 +437,7 @@ var
   S: string;
 begin
   Sz := R.Right - R.Left;
-  B := nil;
-  if (FLogos <> nil) and (Ch.Logo <> '') then
-    B := FLogos.Get(Ch.Logo, Sz, Bg);
+  B := ChannelLogo(FLogos, Ch, Sz, Bg);
   if B <> nil then
   begin
     C.Draw(R.Left, R.Top, B);

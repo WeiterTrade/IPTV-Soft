@@ -48,6 +48,7 @@ type
     FKind: TIconKind;
     FHover, FDown, FChecked: Boolean;
     FIconColor, FCheckedColor, FHoverColor, FHoverIconColor: TColor;
+    FNavStyle, FBordered: Boolean;
     procedure SetKind(V: TIconKind);
     procedure SetChecked(V: Boolean);
   protected
@@ -66,6 +67,32 @@ type
     property HoverIconColor: TColor read FHoverIconColor write FHoverIconColor;
     property OnClick;
     property OnDblClick;
+    property Caption;
+    property Align;
+    property BorderSpacing;
+    property Hint;
+    property ShowHint;
+    { пункт меню разделов: текст слева, выбранный — с подсветкой и полоской }
+    property NavStyle: Boolean read FNavStyle write FNavStyle;
+    { кнопка с рамкой и фоном (для страницы настроек) }
+    property Bordered: Boolean read FBordered write FBordered;
+  end;
+
+  { Переключатель «вкл/выкл» с подписью — замена системным флажкам }
+  TToggle = class(TGraphicControl)
+  private
+    FChecked, FHover: Boolean;
+    FOnChange: TNotifyEvent;
+    procedure SetChecked(V: Boolean);
+  protected
+    procedure Paint; override;
+    procedure Click; override;
+    procedure MouseEnter; override;
+    procedure MouseLeave; override;
+  public
+    constructor Create(AOwner: TComponent); override;
+    property Checked: Boolean read FChecked write SetChecked;
+    property OnChange: TNotifyEvent read FOnChange write FOnChange;
     property Caption;
     property Align;
     property BorderSpacing;
@@ -392,7 +419,21 @@ begin
   Canvas.Brush.Style := bsSolid;
   Canvas.Brush.Color := Color;
   Canvas.FillRect(R);
-  if Enabled and (FHover or FDown) then
+  if FNavStyle and FChecked then
+  begin
+    Canvas.Brush.Color := clrSel;
+    Canvas.Pen.Color := clrSel;
+    Canvas.RoundRect(R.Left + 2, R.Top + 2, R.Right - 2, R.Bottom - 2, 8, 8);
+    Canvas.Brush.Color := clrAccent;
+    Canvas.FillRect(Rect(R.Left + 2, R.Top + 9, R.Left + 5, R.Bottom - 9));
+  end
+  else if FBordered then
+  begin
+    if FHover then Canvas.Brush.Color := clrHover else Canvas.Brush.Color := clrCard;
+    Canvas.Pen.Color := clrFrame;
+    Canvas.RoundRect(R.Left + 1, R.Top + 1, R.Right - 1, R.Bottom - 1, 8, 8);
+  end
+  else if Enabled and (FHover or FDown) then
   begin
     if FDown then Bg := BlendColor(FHoverColor, clWhite, 0.08) else Bg := FHoverColor;
     Canvas.Brush.Color := Bg;
@@ -404,10 +445,11 @@ begin
   end;
   if not Enabled then Ic := clrDisabled
   else if FHover and (FHoverIconColor <> clNone) then Ic := FHoverIconColor
-  else if FChecked then
+  else if FChecked and not FNavStyle then
   begin
     if FCheckedColor <> clNone then Ic := FCheckedColor else Ic := clrAccent;
   end
+  else if FNavStyle and FChecked then Ic := clrAccent
   else Ic := FIconColor;
 
   if Caption = '' then
@@ -424,9 +466,16 @@ begin
     Canvas.Font.Assign(Font);
     Canvas.Font.Color := clrText;
     Canvas.Brush.Style := bsClear;
+    if FNavStyle and FChecked then Canvas.Font.Style := [fsBold];
+    if not Enabled then Canvas.Font.Color := clrDisabled;
     TH := Canvas.TextHeight(Caption);
     if FKind = ikNone then
-      Canvas.TextOut(R.Left + 10, (R.Top + R.Bottom - TH) div 2, Caption)
+    begin
+      if FBordered then
+        Canvas.TextOut((R.Left + R.Right - Canvas.TextWidth(Caption)) div 2, (R.Top + R.Bottom - TH) div 2, Caption)
+      else
+        Canvas.TextOut(R.Left + 12, (R.Top + R.Bottom - TH) div 2, Caption);
+    end
     else
       Canvas.TextOut(IR.Right, (R.Top + R.Bottom - TH) div 2, Caption);
   end;
@@ -462,6 +511,78 @@ begin
   FDown := False;
   Invalidate;
   inherited MouseUp(Button, Shift, X, Y);
+end;
+
+{ TToggle }
+
+constructor TToggle.Create(AOwner: TComponent);
+begin
+  inherited Create(AOwner);
+  ParentColor := True;
+  Width := 400;
+  Height := 30;
+end;
+
+procedure TToggle.SetChecked(V: Boolean);
+begin
+  if V = FChecked then Exit;
+  FChecked := V;
+  Invalidate;
+end;
+
+procedure TToggle.Click;
+begin
+  FChecked := not FChecked;
+  Invalidate;
+  inherited Click;
+  if Assigned(FOnChange) then FOnChange(Self);
+end;
+
+procedure TToggle.MouseEnter;
+begin
+  inherited MouseEnter;
+  FHover := True;
+  Invalidate;
+end;
+
+procedure TToggle.MouseLeave;
+begin
+  inherited MouseLeave;
+  FHover := False;
+  Invalidate;
+end;
+
+procedure TToggle.Paint;
+var
+  R: TRect;
+  cy, x0, TH: Integer;
+  Track, Knob: TColor;
+begin
+  R := ClientRect;
+  Canvas.Brush.Style := bsSolid;
+  Canvas.Brush.Color := Color;
+  Canvas.FillRect(R);
+  cy := (R.Top + R.Bottom) div 2;
+  x0 := R.Left + 2;
+  if FChecked then Track := clrAccent
+  else if FHover then Track := clrPress
+  else Track := clrTrack;
+  if not Enabled then Track := clrDisabled;
+  Knob := clrText;
+  Canvas.Brush.Color := Track;
+  Canvas.Pen.Color := Track;
+  Canvas.RoundRect(x0, cy - 10, x0 + 38, cy + 10, 20, 20);
+  Canvas.Brush.Color := Knob;
+  Canvas.Pen.Color := Knob;
+  if FChecked then
+    Canvas.Ellipse(x0 + 21, cy - 7, x0 + 35, cy + 7)
+  else
+    Canvas.Ellipse(x0 + 3, cy - 7, x0 + 17, cy + 7);
+  Canvas.Brush.Style := bsClear;
+  Canvas.Font.Assign(Font);
+  if Enabled then Canvas.Font.Color := clrText else Canvas.Font.Color := clrDisabled;
+  TH := Canvas.TextHeight('Ag');
+  Canvas.TextOut(x0 + 50, cy - TH div 2, Caption);
 end;
 
 { TFlatSlider }

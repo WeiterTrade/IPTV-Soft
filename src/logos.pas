@@ -57,9 +57,13 @@ type
     { Готовая картинка Size x Size на фоне Bg или nil (будет готова позже). }
     function Get(const Url: string; Size: Integer; Bg: TColor): TBitmap;
     procedure Delivered(List: TList);
+    { True — логотип по этой ссылке получить не удалось (формат или ошибка сети). }
+    function IsFailed(const Url: string): Boolean;
     { True, если с прошлого вызова появились новые логотипы (сбрасывает флаг). }
     function TakeChanged: Boolean;
     procedure ClearMemory;
+    { забыть все логотипы (после очистки кэша на диске) }
+    procedure Reset;
   end;
 
 implementation
@@ -293,7 +297,6 @@ begin
   FLock.Enter;
   try
     FQueue.Insert(0, Url);   { последние запрошенные (видимые) — первыми }
-    while FQueue.Count > 400 do FQueue.Delete(FQueue.Count - 1);
   finally
     FLock.Leave;
   end;
@@ -437,6 +440,21 @@ end;
 procedure TLogoCache.ClearMemory;
 begin
   FBitmaps.Clear;
+end;
+
+procedure TLogoCache.Reset;
+begin
+  FBitmaps.Clear;
+  FMasters.Clear;
+  FPending.Clear;
+  FChanged := True;
+end;
+
+function TLogoCache.IsFailed(const Url: string): Boolean;
+var
+  i: Integer;
+begin
+  Result := (Url = '') or (FMasters.Find(Url, i) and (FMasters.Objects[i] = nil));
 end;
 
 function TLogoCache.TakeChanged: Boolean;

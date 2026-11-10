@@ -95,7 +95,7 @@
         <IsPartOfProject Value="True"/>
       </Unit>
       <Unit>
-        <Filename Value="settingsdlg.pas"/>
+        <Filename Value="settingspage.pas"/>
         <IsPartOfProject Value="True"/>
       </Unit>
       <Unit>
@@ -108,6 +108,10 @@
       </Unit>
       <Unit>
         <Filename Value="catchup.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit>
+      <Unit>
+        <Filename Value="logodb.pas"/>
         <IsPartOfProject Value="True"/>
       </Unit>
     </Units>

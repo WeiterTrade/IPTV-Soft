@@ -19,6 +19,8 @@ type
     TvgId: string;
     TvgName: string;
     Logo: string;
+    LogoAlt: string;   { логотип по шаблону из настроек }
+    LogoDb: string;    { логотип из базы по названию }
     Options: string;   { параметры VLC (#EXTVLCOPT), по одному на строку }
     CatchupType: string;    { архив: shift, append, default, flussonic, xc }
     CatchupSource: string;  { шаблон ссылки на архив }
