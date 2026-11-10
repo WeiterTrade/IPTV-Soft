@@ -75,6 +75,9 @@ type
     procedure SetUseProxy(V: Boolean);
   end;
 
+{ Картинка из сырых RGBA-байтов (например, встроенный логотип) на фоне Bg. }
+function BitmapFromRgba(const Px: array of Byte; W, H, Size: Integer; Bg: TColor): TBitmap;
+
 implementation
 
 uses
@@ -336,6 +339,30 @@ begin
     Result.LoadFromIntfImage(Dst);
   finally
     Dst.Free;
+  end;
+end;
+
+function BitmapFromRgba(const Px: array of Byte; W, H, Size: Integer; Bg: TColor): TBitmap;
+var
+  M: TLogoMaster;
+  i, A: Integer;
+begin
+  M := TLogoMaster.Create;
+  try
+    M.W := W;
+    M.H := H;
+    SetLength(M.Px, W * H * 4);
+    for i := 0 to W * H - 1 do
+    begin
+      A := Px[i * 4 + 3];
+      M.Px[i * 4] := Px[i * 4] * A div 255;
+      M.Px[i * 4 + 1] := Px[i * 4 + 1] * A div 255;
+      M.Px[i * 4 + 2] := Px[i * 4 + 2] * A div 255;
+      M.Px[i * 4 + 3] := A;
+    end;
+    Result := RenderFromMaster(M, Size, Bg);
+  finally
+    M.Free;
   end;
 end;
 

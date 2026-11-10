@@ -9,7 +9,7 @@ uses
   Classes, SysUtils, Types, Forms, Controls, Graphics, StdCtrls, ExtCtrls,
   Menus, Dialogs, LCLType, Clipbrd, Math, LazUTF8, FileUtil, Process,
   m3u, epg, vlcdyn, netload, appsettings, widgets, videohost,
-  channelview, logos, winframe, settingspage, applog, guideview, catchup, logodb, movies, movieview, darkdlg;
+  channelview, logos, winframe, settingspage, applog, guideview, catchup, logodb, movies, movieview, darkdlg, moviepage, movieinfo, applogo;
 
 type
   TLoadKind = (lkPlaylist, lkEpg);
@@ -88,6 +88,9 @@ type
     { настройки внутри окна и база логотипов }
     pgSettings: TSettingsPage;
     FSettingsOpen: Boolean;
+    pgMovie: TMoviePage;
+    FMoviePageOpen: Boolean;
+    FLogoBmp: TBitmap;
     FSettingsOldFrame, FSettingsOldProxy: Boolean;
     FLogoDb: TLogoDb;
     FLogoDbLoading: Boolean;
@@ -248,6 +251,14 @@ type
     procedure WelcomeMediaClick(Sender: TObject);
     procedure WelcomeImportClick(Sender: TObject);
     procedure MovieClick(Sender: TObject; Index: Integer);
+    procedure MovieActivate(Sender: TObject; Index: Integer);
+    procedure OpenMoviePage(M: TMovie);
+    procedure CloseMoviePage;
+    procedure PlaceMoviePage;
+    procedure MoviePagePlay(Sender: TObject; M: TMovie; SourceIndex: Integer);
+    procedure MoviePageBack(Sender: TObject);
+    procedure MoviePageFav(Sender: TObject);
+    procedure MovieInfoDone(Sender: TObject);
     procedure SeekChange(Sender: TObject);
     procedure MovieMenuPopup(Sender: TObject);
     procedure MovieMenuPlay(Sender: TObject);
@@ -721,6 +732,7 @@ var
   i: Integer;
 begin
   GFormAlive := False;
+  FreeAndNil(FLogoBmp);
   if FRecPlayer <> nil then
   begin
     libvlc_media_player_stop(FRecPlayer);
@@ -833,6 +845,7 @@ begin
   btnMenuSettings.Width := 130;
   btnMenuSettings.Left := 300;
   btnMenuSettings.BorderSpacing.Around := 2;
+  btnMenuSettings.Visible := False;  { настройки — в боковой рейке }
 
   pbTitle := TPaintBox.Create(Self);
   pbTitle.Parent := pnlTitle;
@@ -1028,7 +1041,7 @@ begin
   mvView.Logos := FLogos;
   mvView.IsFavorite := @IsMovieFav;
   mvView.OnMovieClick := @MovieClick;
-  mvView.OnMovieActivate := @MovieClick;
+  mvView.OnMovieActivate := @MovieActivate;
   mvView.Visible := False;
   pmMovie := TPopupMenu.Create(Self);
   pmMovie.OnPopup := @MovieMenuPopup;
@@ -1112,7 +1125,7 @@ begin
   pnlMain := MakePanel(pnlRoot, alClient, clrBg, 0);
   pnlMain.Constraints.MinWidth := 320;
   { нижняя часть: панель управления + расписание; высоту можно тянуть мышью }
-  pnlBottom := MakePanel(pnlMain, alBottom, clrBg, 50 + FSettings.InfoHeight);
+  pnlBottom := MakePanel(pnlMain, alBottom, clrBg, 50 + 100);
   pnlBottom.Constraints.MinHeight := 50 + 60;
   splInfo := TSplitter.Create(Self);
   splInfo.Parent := pnlMain;
@@ -1405,20 +1418,18 @@ begin
   C.Brush.Style := bsSolid;
   C.Brush.Color := clrTitle;
   C.FillRect(Rect(0, 0, pbLogo.Width, H));
-  X := 12;
-  Y := (H - 22) div 2;
-  C.Brush.Color := clrAccent;
-  C.Pen.Color := clrAccent;
-  C.RoundRect(X, Y, X + 22, Y + 22, 7, 7);
-  C.Brush.Color := clrTitle;
-  C.Pen.Color := clrTitle;
-  C.Polygon([Point(X + 8, Y + 6), Point(X + 8, Y + 16), Point(X + 16, Y + 11)]);
+  X := 10;
+  Y := (H - 24) div 2;
+  if FLogoBmp = nil then
+    FLogoBmp := BitmapFromRgba(LOGO_RGBA, LOGO_W, LOGO_H, 24, clrTitle);
+  if FLogoBmp <> nil then
+    C.Draw(X, Y, FLogoBmp);
   C.Brush.Style := bsClear;
   C.Font.Assign(Font);
   C.Font.Size := 10;
   C.Font.Style := [fsBold];
   C.Font.Color := clrText;
-  C.TextOut(X + 32, (H - C.TextHeight('Ag')) div 2, 'IPTV Aristocrat');
+  C.TextOut(X + 34, (H - C.TextHeight('Ag')) div 2, 'IPTV Aristocrat');
 end;
 
 procedure TMainForm.TitlePaint(Sender: TObject);
@@ -1500,7 +1511,13 @@ end;
 
 procedure TMainForm.WinMinClick(Sender: TObject);
 begin
+  { на Windows сворачиваем всё приложение — иначе окно без рамки
+    превращается в маленький заголовок в углу экрана }
+  {$IFDEF WINDOWS}
+  Application.Minimize;
+  {$ELSE}
   WindowState := wsMinimized;
+  {$ENDIF}
 end;
 
 procedure TMainForm.WinMaxClick(Sender: TObject);
@@ -2635,6 +2652,7 @@ begin
   try
     if FFullscreen then SetFullscreen(False);
     if FWall then SetChannelWall(False);
+    CloseMoviePage;
     if pgSettings = nil then
     begin
       Log('создание страницы настроек');
@@ -2821,9 +2839,18 @@ begin
   else
     UpdateFrameControls;
   BuildWelcome;
-  { загружаем и ТВ-плейлист, и медиатеку (в фоне) }
-  K := FSettings.LastMode;
-  if (K < SEC_TV) or (K > SEC_HISTORY) then K := SEC_TV;
+  { стандартная раскладка при каждом запуске: список ~1/3 ширины,
+    расписание обычной высоты, раздел «ТВ-каналы» → «Все каналы» }
+  K := ClientWidth;
+  if K < 800 then K := Screen.Width;
+  K := K * 32 div 100;
+  if K < 360 then K := 360;
+  if K > 700 then K := 700;
+  pnlSide.Width := K;
+  splSide.Left := pnlSide.Left + pnlSide.Width + 1;
+  pnlBottom.Height := 50 + 100;
+  splInfo.Top := pnlBottom.Top - 6;
+  K := SEC_TV;
   FSection := -1;
   SetSection(K);
   if (K <> SEC_TV) and (FPlaylist = nil) then
@@ -2889,6 +2916,7 @@ var
 begin
   InEdit := ActiveControl = edSearch;
   if FSettingsOpen and (Key <> VK_ESCAPE) then Exit;
+  if FMoviePageOpen and (Key <> VK_ESCAPE) then Exit;
   if ssCtrl in Shift then
   begin
     case Key of
@@ -2918,7 +2946,12 @@ begin
         Key := 0;
       end;
     VK_ESCAPE:
-      if FSettingsOpen then
+      if FMoviePageOpen and not FSettingsOpen then
+      begin
+        CloseMoviePage;
+        Key := 0;
+      end
+      else if FSettingsOpen then
       begin
         pgSettings.SaveValues;
         CloseSettings;
@@ -3461,6 +3494,7 @@ begin
   begin
     chView.Invalidate;
     pbInfo.Invalidate;
+    if FMoviePageOpen and (pgMovie <> nil) then pgMovie.Invalidate;
   end;
   if (FPlayer <> nil) and FPlaying then
   begin
@@ -3669,6 +3703,7 @@ begin
   if WindowState = wsMinimized then Exit;
   UpdateSideMax;
   if FSettingsOpen then PlaceSettings;
+  if FMoviePageOpen then PlaceMoviePage;
   if (pnlWelcome <> nil) and pnlWelcome.Visible then UpdateWelcome;
   if (pnlBottom <> nil) and (pnlMain <> nil) and pnlBottom.Visible then
   begin
@@ -3711,6 +3746,7 @@ var
 begin
   if FWall then SetChannelWall(False);
   CloseGuide;
+  CloseMoviePage;
   if FSection <> Value then FInCategory := False;
   FSection := Value;
   FMovieMode := Value = SEC_MOVIES;
@@ -3945,10 +3981,125 @@ procedure TMainForm.MovieClick(Sender: TObject; Index: Integer);
 var
   M: TMovie;
 begin
+  { щелчок по постеру — страница фильма }
   M := mvView.MovieAt(Index);
   if M = nil then Exit;
+  OpenMoviePage(M);
+end;
+
+procedure TMainForm.MovieActivate(Sender: TObject; Index: Integer);
+var
+  M: TMovie;
+begin
+  { двойной щелчок / Enter — сразу смотреть }
+  M := mvView.MovieAt(Index);
+  if M = nil then Exit;
+  CloseMoviePage;
   if (M = FCurMovie) and FPlaying and not FWall then Exit;
   PlayMovie(M, 0);
+end;
+
+procedure TMainForm.PlaceMoviePage;
+var
+  T, L: Integer;
+begin
+  if pgMovie = nil then Exit;
+  T := 0;
+  if pnlTitle.Visible then T := pnlTitle.Top + pnlTitle.Height;
+  L := 0;
+  if pnlRail.Visible then L := pnlRail.Left + pnlRail.Width;
+  pgMovie.SetBounds(L, T, Math.Max(100, pnlRoot.ClientWidth - L), Math.Max(100, pnlRoot.ClientHeight - T));
+end;
+
+procedure TMainForm.OpenMoviePage(M: TMovie);
+var
+  Th: TMovieInfoThread;
+begin
+  if M = nil then Exit;
+  try
+    if FFullscreen then SetFullscreen(False);
+    if FWall then SetChannelWall(False);
+    if pgMovie = nil then
+    begin
+      pgMovie := TMoviePage.CreatePage(Self, FLogos);
+      pgMovie.Visible := False;
+      pgMovie.Align := alNone;
+      pgMovie.Parent := pnlRoot;
+      pgMovie.OnPlay := @MoviePagePlay;
+      pgMovie.OnBack := @MoviePageBack;
+      pgMovie.OnFav := @MoviePageFav;
+    end;
+    if M.InfoState = 0 then
+    begin
+      M.InfoState := 1;
+      Th := TMovieInfoThread.Create(M.Title, M.Year, FSettings.CacheDir, FMediaGen);
+      Th.Data := M;
+      Th.OnTerminate := @MovieInfoDone;
+      Th.Start;
+    end;
+    pgMovie.SetMovie(M);
+    pgMovie.SetFavorite(IsMovieFav(M));
+    FMoviePageOpen := True;
+    PlaceMoviePage;
+    if FSlot >= 0 then FSlots[FSlot].Visible := False;
+    pgMovie.Visible := True;
+    pgMovie.BringToFront;
+  except
+    on E: Exception do
+    begin
+      FMoviePageOpen := False;
+      if pgMovie <> nil then pgMovie.Visible := False;
+      ReportFatal(E, 'Страница фильма');
+    end;
+  end;
+end;
+
+procedure TMainForm.CloseMoviePage;
+begin
+  if not FMoviePageOpen then Exit;
+  FMoviePageOpen := False;
+  pgMovie.Visible := False;
+  if (FSlot >= 0) and not FSettingsOpen then FSlots[FSlot].Visible := True;
+end;
+
+procedure TMainForm.MoviePagePlay(Sender: TObject; M: TMovie; SourceIndex: Integer);
+begin
+  CloseMoviePage;
+  if (M = FCurMovie) and FPlaying and (SourceIndex = 0) then Exit;
+  PlayMovie(M, SourceIndex);
+end;
+
+procedure TMainForm.MoviePageBack(Sender: TObject);
+begin
+  CloseMoviePage;
+end;
+
+procedure TMainForm.MoviePageFav(Sender: TObject);
+var
+  M: TMovie;
+begin
+  if pgMovie = nil then Exit;
+  M := pgMovie.Movie;
+  if M = nil then Exit;
+  FSettings.ToggleFavorite(M.Url);
+  pgMovie.SetFavorite(IsMovieFav(M));
+  if FMovieMode and (segTabs.ItemIndex = TAB_FAV) then ApplyFilter else mvView.Invalidate;
+end;
+
+procedure TMainForm.MovieInfoDone(Sender: TObject);
+var
+  Th: TMovieInfoThread;
+  M: TMovie;
+begin
+  Th := TMovieInfoThread(Sender);
+  { библиотеку могли пересобрать — тогда объект фильма уже другой }
+  if Th.Generation <> FMediaGen then Exit;
+  M := TMovie(Th.Data);
+  if M = nil then Exit;
+  M.Info := Th.Info;
+  M.InfoState := 2;
+  if FMoviePageOpen and (pgMovie <> nil) and (pgMovie.Movie = M) then
+    pgMovie.UpdateInfo;
 end;
 
 procedure TMainForm.SeekChange(Sender: TObject);

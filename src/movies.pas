@@ -9,7 +9,7 @@ unit movies;
 interface
 
 uses
-  Classes, SysUtils, contnrs, m3u;
+  Classes, SysUtils, contnrs, m3u, movieinfo;
 
 type
   TMovie = class
@@ -20,6 +20,8 @@ type
     TitleLower: string;
     Sources: TFPList;     { TChannel — все записи плейлиста с этим фильмом }
     Groups: TStringList;  { категории, в которых встречается фильм }
+    Info: TMovieInfo;     { описание, режиссёр, актёры (загружается по запросу) }
+    InfoState: Integer;   { 0 — не загружали, 1 — загружается, 2 — готово }
     constructor Create;
     destructor Destroy; override;
     function MainSource: TChannel;
