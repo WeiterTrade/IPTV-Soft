@@ -35,8 +35,8 @@ type
     FDownIndex: Integer;
     FHoverGuide, FDownGuide: Boolean;
     FLarge: Boolean;
-    procedure SetLarge(V: Boolean);
     FOnGuideClick: TItemEvent;
+    procedure SetLarge(V: Boolean);
     function GuideRect(const R: TRect): TRect;
     function HasGuideButton: Boolean;
     procedure SetMode(V: TViewMode);
