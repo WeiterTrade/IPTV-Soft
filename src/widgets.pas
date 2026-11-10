@@ -168,7 +168,7 @@ var
 begin
   Dpi := Screen.PixelsPerInch;
   if Dpi < 96 then Dpi := 96;
-  Result := MulDiv(V, Dpi, 96);
+  Result := (V * Dpi + 48) div 96;
 end;
 
 var
