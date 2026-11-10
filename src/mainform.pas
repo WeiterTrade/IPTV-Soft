@@ -91,6 +91,9 @@ type
     gripTop, gripBottom, gripLeft, gripRight: TPanel;
     pnlRoot, pnlTitle, pnlSide, pnlPl, pnlViewRow, pnlBack, pnlMain, pnlVideo, pnlInfo, pnlControls: TPanel;
     pnlBottom: TPanel;
+    FSlots: array[0..3] of TPanel;   { отдельная область видео для каждого плеера }
+    FSlot: Integer;
+    function AcquireSlot: Integer;
     splInfo: TSplitter;
     pbTitle, pbInfo: TPaintBox;
     btnWinMin, btnWinMax, btnWinClose: TFlatButton;
@@ -244,11 +247,19 @@ var
   GFormAlive: Boolean = False;
   GPendingReleases: LongInt = 0;
 
+const
+  VIDEO_SLOTS = 4;
+
+var
+  { 1 — в области видео ещё работает (или останавливается) плеер }
+  GSlotBusy: array[0..VIDEO_SLOTS - 1] of LongInt;
+
 type
   { Остановка и освобождение плеера VLC в фоне (stop может занимать секунды) }
   TReleaseThread = class(TThread)
   public
     P: Pointer;
+    Slot: Integer;
   protected
     procedure Execute; override;
   end;
@@ -260,10 +271,12 @@ begin
     libvlc_media_player_release(P);
   except
   end;
+  if (Slot >= 0) and (Slot < VIDEO_SLOTS) then
+    InterLockedExchange(GSlotBusy[Slot], 0);
   InterLockedDecrement(GPendingReleases);
 end;
 
-procedure ReleasePlayerAsync(P: Pointer);
+procedure ReleasePlayerAsync(P: Pointer; Slot: Integer = -1);
 var
   T: TReleaseThread;
 begin
@@ -271,6 +284,7 @@ begin
   InterLockedIncrement(GPendingReleases);
   T := TReleaseThread.Create(True);
   T.P := P;
+  T.Slot := Slot;
   T.FreeOnTerminate := True;
   T.Start;
 end;
@@ -658,7 +672,7 @@ end;
 
 procedure TMainForm.BuildUI;
 var
-  NextTop: Integer;
+  NextTop, i: Integer;
 
   procedure StackTop(C: TControl);
   begin
@@ -890,14 +904,19 @@ begin
   pbInfo.OnMouseWheel := @InfoWheel;
   pbInfo.OnClick := @InfoClick;
   pbInfo.OnDblClick := @InfoDblClick;
-  pbInfo.ShowHint := True;
-  pbInfo.Hint := 'Колёсико мыши или стрелки справа — листать программу.' + LineEnding +
-    'Щелчок по прошедшей передаче — смотреть в записи. Двойной щелчок — вся телепрограмма (E).';
+
 
   pnlVideo := MakePanel(pnlMain, alClient, clBlack, 0);
   pnlVideo.Font.Color := clrDim;
   pnlVideo.Caption := 'Выберите канал в списке слева';
   pnlVideo.OnDblClick := @VideoDblClick;
+  for i := 0 to VIDEO_SLOTS - 1 do
+  begin
+    FSlots[i] := MakePanel(pnlVideo, alClient, clBlack, 0);
+    FSlots[i].Visible := False;
+    FSlots[i].OnDblClick := @VideoDblClick;
+  end;
+  FSlot := -1;
 
   btnPrev := MakeButton(pnlControls, ikPrev, alLeft, 'Предыдущий канал (PgUp)', @PrevClick);
   btnPrev.Left := 0;
@@ -988,7 +1007,7 @@ begin
   Log('libVLC загружен, версия ' + VlcVersion);
   MaskFloatExceptions;
   Args[0] := '--no-video-title-show';
-  Args[1] := '--network-caching=1500';
+  Args[1] := '--network-caching=1000';
   Args[2] := '--quiet';
   FVlc := libvlc_new(3, @Args[0]);
   if FVlc = nil then
@@ -1628,7 +1647,7 @@ function TMainForm.StartMedia(Ch: TChannel; const Url: string): Boolean;
 var
   M, Old: Pointer;
   SL: TStringList;
-  i: Integer;
+  i, NewSlot: Integer;
   Opt: string;
 begin
   Result := False;
@@ -1664,6 +1683,14 @@ begin
     end;
   end;
 
+  NewSlot := AcquireSlot;
+  if NewSlot < 0 then
+  begin
+    libvlc_media_release(M);
+    FPlayerStatus := 'Предыдущий канал ещё закрывается, попробуйте через секунду';
+    UpdateStatusLabel;
+    Exit;
+  end;
   Old := FPlayer;
   FPlayer := libvlc_media_player_new(FVlc);
   if FPlayer = nil then
@@ -1676,16 +1703,39 @@ begin
   if Old <> nil then
   begin
     libvlc_audio_set_mute(Old, 1);
-    ReleasePlayerAsync(Old);
-  end;
+    ReleasePlayerAsync(Old, FSlot);
+  end
+  else if FSlot >= 0 then
+    InterLockedExchange(GSlotBusy[FSlot], 0);
   libvlc_video_set_mouse_input(FPlayer, 0);
   libvlc_video_set_key_input(FPlayer, 0);
   pnlVideo.Caption := '';
-  AttachVideoTo(FPlayer, pnlVideo);
+  { новый плеер получает свою, свободную область видео }
+  FSlot := NewSlot;
+  InterLockedExchange(GSlotBusy[FSlot], 1);
+  FSlots[FSlot].Visible := True;
+  FSlots[FSlot].BringToFront;
+  for i := 0 to VIDEO_SLOTS - 1 do
+    if i <> FSlot then FSlots[i].Visible := False;
+  AttachVideoTo(FPlayer, FSlots[FSlot]);
   libvlc_media_player_set_media(FPlayer, M);
   libvlc_media_release(M);
   libvlc_media_player_play(FPlayer);
   Result := True;
+end;
+
+function TMainForm.AcquireSlot: Integer;
+var
+  i, Tries: Integer;
+begin
+  for Tries := 0 to 150 do
+  begin
+    for i := 0 to VIDEO_SLOTS - 1 do
+      if (i <> FSlot) and (GSlotBusy[i] = 0) then
+        Exit(i);
+    Sleep(20);
+  end;
+  Result := -1;
 end;
 
 procedure TMainForm.AfterPlayStarted(Ch: TChannel);
@@ -1813,9 +1863,11 @@ procedure TMainForm.StopPlayback;
 begin
   if FPlayer <> nil then
   begin
-    ReleasePlayerAsync(FPlayer);
+    ReleasePlayerAsync(FPlayer, FSlot);
     FPlayer := nil;
   end;
+  if FSlot >= 0 then FSlots[FSlot].Visible := False;
+  FSlot := -1;
   FPlaying := False;
   FArchive := False;
   btnLive.Visible := False;

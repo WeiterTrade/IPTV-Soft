@@ -148,7 +148,7 @@ begin
   ShowLogos := True;
   OpenMaximized := True;
   AutoPlayLast := True;
-  NetworkCaching := 1500;
+  NetworkCaching := 1000;
   RecordDir := DefaultRecordDir;
   UsePlaylistEpg := True;
   EpgPastDays := 7;
@@ -251,6 +251,7 @@ begin
   if Volume > 100 then Volume := 100;
   if (ViewMode < 0) or (ViewMode > 3) then ViewMode := 0;
   if (LastTab < 0) or (LastTab > 2) then LastTab := 1;
+  if NetworkCaching = 1500 then NetworkCaching := 1000;   { старое значение по умолчанию }
   if NetworkCaching < 100 then NetworkCaching := 100;
   if NetworkCaching > 60000 then NetworkCaching := 60000;
   if RecordDir = '' then RecordDir := DefaultRecordDir;
