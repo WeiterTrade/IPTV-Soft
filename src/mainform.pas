@@ -93,7 +93,6 @@ type
     pnlBottom: TPanel;
     FSlots: array[0..3] of TPanel;   { отдельная область видео для каждого плеера }
     FSlot: Integer;
-    function AcquireSlot: Integer;
     splInfo: TSplitter;
     pbTitle, pbInfo: TPaintBox;
     btnWinMin, btnWinMax, btnWinClose: TFlatButton;
@@ -117,6 +116,7 @@ type
     miPlay, miGuide, miExternal, miRecord, miFav, miCopy: TMenuItem;
 
     procedure BuildUI;
+    function AcquireSlot: Integer;
     procedure BuildFrame;
     function MakeButton(AParent: TWinControl; AKind: TIconKind; AAlign: TAlign;
       const AHint: string; AHandler: TNotifyEvent): TFlatButton;
