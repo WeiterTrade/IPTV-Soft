@@ -93,7 +93,7 @@ begin
     ACanvas.RoundRect(ARect.Left + 3, ARect.Top + 1, ARect.Right - 3, ARect.Bottom - 1, 6, 6);
     { тонкая полоска акцентного цвета слева }
     ACanvas.Brush.Color := clrAccent;
-    ACanvas.FillRect(Rect(ARect.Left + 3, ARect.Top + 6, ARect.Left + 6, ARect.Bottom - 6));
+    ACanvas.FillRect(Types.Rect(ARect.Left + 3, ARect.Top + 6, ARect.Left + 6, ARect.Bottom - 6));
   end;
   H := ARect.Bottom - ARect.Top;
   X := ARect.Left + Sc(30);
@@ -108,8 +108,8 @@ begin
       ACanvas.Ellipse(ARect.Left + Sc(12), Y - 3, ARect.Left + Sc(12) + 7, Y + 4);
     end
     else
-      ACanvas.Polyline([Point(ARect.Left + Sc(11), Y), Point(ARect.Left + Sc(14), Y + 3),
-        Point(ARect.Left + Sc(20), Y - 4)]);
+      ACanvas.Polyline([Types.Point(ARect.Left + Sc(11), Y), Types.Point(ARect.Left + Sc(14), Y + 3),
+        Types.Point(ARect.Left + Sc(20), Y - 4)]);
     ACanvas.Pen.Width := 1;
   end;
   ACanvas.Brush.Style := bsClear;

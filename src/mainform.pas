@@ -5124,6 +5124,11 @@ begin
   ApplyFilter;
 end;
 
+procedure TMainForm.LocalDeleteClick(Sender: TObject);
+begin
+  DeleteLocal(chView.SelectedChannel);
+end;
+
 procedure TMainForm.DeleteLocal(Ch: TChannel);
 var
   Fn: string;
