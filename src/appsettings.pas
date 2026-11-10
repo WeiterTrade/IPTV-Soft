@@ -17,6 +17,7 @@ type
   TPlaylistEntry = class
   public
     Name, Source, Epg: string;
+    Kind: Integer;   { 0 — ТВ-каналы, 1 — медиатека (фильмы) }
   end;
 
   TAppSettings = class
@@ -34,6 +35,7 @@ type
     Volume: Integer;
     Muted: Boolean;
     LastPlaylist: Integer;
+    LastMediaPlaylist: Integer;
     LastUrl: string;
     LastTab: Integer;
     LastMode: Integer;           { 0 — каналы, 1 — фильмы }
@@ -76,7 +78,9 @@ type
 
     function PlaylistCount: Integer;
     function Playlist(Index: Integer): TPlaylistEntry;
-    function AddPlaylist(const AName, ASource, AEpg: string): Integer;
+    function AddPlaylist(const AName, ASource, AEpg: string; AKind: Integer = 0): Integer;
+    function CountOfKind(AKind: Integer): Integer;
+    function FirstOfKind(AKind: Integer): Integer;
     procedure DeletePlaylist(Index: Integer);
     function IsFavorite(const Url: string): Boolean;
     procedure ToggleFavorite(const Url: string);
@@ -208,6 +212,7 @@ begin
   Volume := Ini.ReadInteger('General', 'Volume', Volume);
   Muted := Ini.ReadBool('General', 'Muted', Muted);
   LastPlaylist := Ini.ReadInteger('General', 'LastPlaylist', 0);
+  LastMediaPlaylist := Ini.ReadInteger('General', 'LastMediaPlaylist', -1);
   LastUrl := Ini.ReadString('General', 'LastUrl', '');
   LastTab := Ini.ReadInteger('General', 'LastTab', LastTab);
   LastMode := Ini.ReadInteger('General', 'LastMode', LastMode);
@@ -251,7 +256,8 @@ begin
     Sec := 'Playlist' + IntToStr(i);
     AddPlaylist(Ini.ReadString(Sec, 'Name', 'Плейлист ' + IntToStr(i)),
                 Ini.ReadString(Sec, 'Source', ''),
-                Ini.ReadString(Sec, 'Epg', ''));
+                Ini.ReadString(Sec, 'Epg', ''),
+                Ini.ReadInteger(Sec, 'Kind', 0));
   end;
   ReadList(Ini, 'EpgSources', FEpgSources);
   ReadList(Ini, 'Favorites', FFavorites);
@@ -281,6 +287,7 @@ begin
   Ini.WriteInteger('General', 'Volume', Volume);
   Ini.WriteBool('General', 'Muted', Muted);
   Ini.WriteInteger('General', 'LastPlaylist', LastPlaylist);
+  Ini.WriteInteger('General', 'LastMediaPlaylist', LastMediaPlaylist);
   Ini.WriteString('General', 'LastUrl', LastUrl);
   Ini.WriteInteger('General', 'LastTab', LastTab);
   Ini.WriteInteger('General', 'LastMode', LastMode);
@@ -330,6 +337,7 @@ begin
     Ini.WriteString(Sec, 'Name', Playlist(i).Name);
     Ini.WriteString(Sec, 'Source', Playlist(i).Source);
     Ini.WriteString(Sec, 'Epg', Playlist(i).Epg);
+    Ini.WriteInteger(Sec, 'Kind', Playlist(i).Kind);
   end;
   WriteList(Ini, 'EpgSources', FEpgSources);
   WriteList(Ini, 'Favorites', FFavorites);
@@ -429,7 +437,7 @@ begin
   Result := TPlaylistEntry(FPlaylists[Index]);
 end;
 
-function TAppSettings.AddPlaylist(const AName, ASource, AEpg: string): Integer;
+function TAppSettings.AddPlaylist(const AName, ASource, AEpg: string; AKind: Integer): Integer;
 var
   E: TPlaylistEntry;
 begin
@@ -437,7 +445,26 @@ begin
   E.Name := AName;
   E.Source := ASource;
   E.Epg := AEpg;
+  E.Kind := AKind;
   Result := FPlaylists.Add(E);
+end;
+
+function TAppSettings.CountOfKind(AKind: Integer): Integer;
+var
+  i: Integer;
+begin
+  Result := 0;
+  for i := 0 to FPlaylists.Count - 1 do
+    if Playlist(i).Kind = AKind then Inc(Result);
+end;
+
+function TAppSettings.FirstOfKind(AKind: Integer): Integer;
+var
+  i: Integer;
+begin
+  for i := 0 to FPlaylists.Count - 1 do
+    if Playlist(i).Kind = AKind then Exit(i);
+  Result := -1;
 end;
 
 procedure TAppSettings.DeletePlaylist(Index: Integer);

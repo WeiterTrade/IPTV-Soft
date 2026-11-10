@@ -8,8 +8,8 @@ interface
 uses
   Classes, SysUtils, Types, Forms, Controls, Graphics, StdCtrls, ExtCtrls,
   Menus, Dialogs, LCLType, Clipbrd, Math, LazUTF8, FileUtil, Process,
-  m3u, epg, vlcdyn, netload, appsettings, widgets, playlistdlg, videohost,
-  channelview, logos, winframe, settingspage, applog, guideview, catchup, logodb, movies, movieview;
+  m3u, epg, vlcdyn, netload, appsettings, widgets, videohost,
+  channelview, logos, winframe, settingspage, applog, guideview, catchup, logodb, movies, movieview, darkdlg;
 
 type
   TLoadKind = (lkPlaylist, lkEpg);
@@ -27,6 +27,7 @@ type
     CacheOnly: Boolean;      { только прочитать сохранённую копию плейлиста }
     Refresh: Boolean;        { фоновое обновление после показа копии }
     Unchanged: Boolean;      { плейлист на сервере не изменился }
+    MediaLib: Boolean;       { медиатека: все записи — фильмы }
     CacheDir: string;
     Force: Boolean;
     Generation: Integer;
@@ -97,7 +98,13 @@ type
     FVod, FPaused: Boolean;
     FCurMovie: TMovie;
     FMenuMovie: TMovie;
-    segMode: TSegmentBar;
+    FSection: Integer;
+    FMediaPl: TPlaylistData;
+    FMediaGen: Integer;
+    FComboMap: array of Integer;
+    pnlRail: TPanel;
+    btnRailTv, btnRailMovies, btnRailHistory, btnRailSettings: TFlatButton;
+    pnlWelcome: TPanel;
     mvView: TMovieView;
     pnlSeek: TPanel;
     sldSeek: TFlatSlider;
@@ -192,7 +199,13 @@ type
     procedure PlaceSettings;
     procedure UpdateListVisibility;
     procedure ApplyMovieFilter;
-    procedure SetMovieMode(Value: Boolean);
+    procedure SetSection(Value: Integer);
+    function CurrentKind: Integer;
+    function ComboIndex: Integer;
+    procedure ApplyHistoryFilter;
+    procedure AddPlaylistKind(AKind: Integer);
+    procedure BuildWelcome;
+    procedure UpdateWelcome;
     procedure PlayMovie(M: TMovie; SourceIndex: Integer);
     function IsMovieFav(M: TMovie): Boolean;
     procedure ApplyAfterImport;
@@ -230,7 +243,10 @@ type
     procedure FullClick(Sender: TObject);
     procedure SettingsClick(Sender: TObject);
     procedure SettingsPageClose(Sender: TObject);
-    procedure ModeChange(Sender: TObject);
+    procedure RailClick(Sender: TObject);
+    procedure WelcomeTvClick(Sender: TObject);
+    procedure WelcomeMediaClick(Sender: TObject);
+    procedure WelcomeImportClick(Sender: TObject);
     procedure MovieClick(Sender: TObject; Index: Integer);
     procedure SeekChange(Sender: TObject);
     procedure MovieMenuPopup(Sender: TObject);
@@ -286,6 +302,9 @@ implementation
 
 const
   APP_NAME = 'IPTV Aristocrat';
+  SEC_TV = 0;
+  SEC_MOVIES = 1;
+  SEC_HISTORY = 2;
   TAB_FAV = 0;
   TAB_ALL = 1;
   TAB_CAT = 2;
@@ -565,10 +584,13 @@ begin
       end
       else
       begin
-        { отделяем фильмы от телеканалов и объединяем повторы }
-        MarkVod(Playlist);
-        Movies := TMovieLib.Create;
-        Movies.Build(Playlist);
+        if MediaLib then
+        begin
+          { медиатека: все записи — фильмы; объединяем повторы }
+          for i := 0 to Playlist.Count - 1 do Playlist.Get(i).IsVod := True;
+          Movies := TMovieLib.Create;
+          Movies.Build(Playlist);
+        end;
       end;
     end
     else
@@ -727,6 +749,7 @@ begin
   FLogos.Free;
   FLogoDb.Free;
   FMovies.Free;
+  FMediaPl.Free;
   FMovieList.Free;
   FView.Free;
   FPlaylist.Free;
@@ -817,6 +840,29 @@ begin
   pbTitle.OnPaint := @TitlePaint;
   pbTitle.OnMouseDown := @TitleMouseDown;
 
+  { рейка разделов слева: ТВ-каналы, Фильмы, История, Настройки }
+  pnlRail := MakePanel(pnlRoot, alLeft, clrTitle, 0);
+  pnlRail.Width := 60;
+  pnlRail.Left := 0;
+  btnRailTv := MakeButton(pnlRail, ikTv, alTop, 'ТВ-каналы', @RailClick);
+  btnRailTv.Tag := SEC_TV;
+  btnRailMovies := MakeButton(pnlRail, ikFilm, alTop, 'Фильмы (медиатека)', @RailClick);
+  btnRailMovies.Tag := SEC_MOVIES;
+  btnRailHistory := MakeButton(pnlRail, ikHistory, alTop, 'История просмотров', @RailClick);
+  btnRailHistory.Tag := SEC_HISTORY;
+  btnRailSettings := MakeButton(pnlRail, ikSettings, alBottom, 'Настройки', @SettingsClick);
+  btnRailTv.Top := 10;
+  btnRailMovies.Top := 100;
+  btnRailHistory.Top := 200;
+  btnRailTv.Height := 50;
+  btnRailMovies.Height := 50;
+  btnRailHistory.Height := 50;
+  btnRailSettings.Height := 50;
+  btnRailTv.NavStyle := True;
+  btnRailMovies.NavStyle := True;
+  btnRailHistory.NavStyle := True;
+  btnRailTv.BorderSpacing.Top := 8;
+
   if FSystemFrame then
   begin
     pnlTitle.Visible := False;
@@ -844,30 +890,19 @@ begin
   { ---------- боковая панель ---------- }
   pnlSide := MakePanel(pnlRoot, alLeft, clrSide, 0);
   pnlSide.Width := FSettings.SideWidth;
+  pnlSide.Left := 100;
   pnlSide.Constraints.MinWidth := 250;
 
   splSide := TSplitter.Create(Self);
   splSide.Parent := pnlRoot;
   splSide.Align := alLeft;
-  splSide.Left := pnlSide.Width + 1;
+  splSide.Left := pnlSide.Left + pnlSide.Width + 1;
   splSide.Width := 4;
   splSide.Color := clrBg;
   splSide.ParentColor := False;
   splSide.ResizeStyle := rsUpdate;
   splSide.MinSize := 250;
 
-  segMode := TSegmentBar.Create(Self);
-  segMode.Parent := pnlSide;
-  segMode.Items.Add('Каналы');
-  segMode.Items.Add('Фильмы');
-  segMode.ItemIndex := 0;
-  segMode.Height := 36;
-  segMode.BorderSpacing.Left := 10;
-  segMode.BorderSpacing.Right := 10;
-  segMode.BorderSpacing.Top := 10;
-  segMode.OnChange := @ModeChange;
-  segMode.Visible := False;
-  StackTop(segMode);
 
   segTabs := TSegmentBar.Create(Self);
   segTabs.Parent := pnlSide;
@@ -1520,6 +1555,7 @@ begin
     FFullPrevState := WindowState;
     pnlSide.Visible := False;
     splSide.Visible := False;
+    pnlRail.Visible := False;
     pnlBottom.Visible := False;
     splInfo.Visible := False;
     UpdateFrameControls;
@@ -1547,6 +1583,7 @@ begin
     WindowState := FFullPrevState;
     if not FSystemFrame then BoundsRect := FFullPrevBounds;
 {$ENDIF}
+    pnlRail.Visible := True;
     pnlSide.Visible := True;
     splSide.Visible := True;
     splSide.Left := pnlSide.Left + pnlSide.Width + 1;
@@ -1563,24 +1600,32 @@ end;
 
 procedure TMainForm.RefreshPlaylistCombo;
 var
-  i: Integer;
+  i, K, Sel, Last: Integer;
 begin
+  K := CurrentKind;
+  if K = 1 then Last := FSettings.LastMediaPlaylist else Last := FSettings.LastPlaylist;
+  if (Last < 0) or (Last >= FSettings.PlaylistCount) or (FSettings.Playlist(Last).Kind <> K) then
+    Last := FSettings.FirstOfKind(K);
+  if K = 1 then FSettings.LastMediaPlaylist := Last else FSettings.LastPlaylist := Last;
   FUpdating := True;
   try
     cbPlaylists.Items.BeginUpdate;
     try
       cbPlaylists.Items.Clear;
+      SetLength(FComboMap, 0);
+      Sel := -1;
       for i := 0 to FSettings.PlaylistCount - 1 do
-        cbPlaylists.Items.Add(FSettings.Playlist(i).Name);
+        if FSettings.Playlist(i).Kind = K then
+        begin
+          cbPlaylists.Items.Add(FSettings.Playlist(i).Name);
+          SetLength(FComboMap, Length(FComboMap) + 1);
+          FComboMap[High(FComboMap)] := i;
+          if i = Last then Sel := High(FComboMap);
+        end;
     finally
       cbPlaylists.Items.EndUpdate;
     end;
-    if FSettings.PlaylistCount > 0 then
-    begin
-      if (FSettings.LastPlaylist < 0) or (FSettings.LastPlaylist >= FSettings.PlaylistCount) then
-        FSettings.LastPlaylist := 0;
-      cbPlaylists.ItemIndex := FSettings.LastPlaylist;
-    end;
+    cbPlaylists.ItemIndex := Sel;
   finally
     FUpdating := False;
   end;
@@ -1588,19 +1633,43 @@ begin
   UpdateTransport;
 end;
 
+function TMainForm.ComboIndex: Integer;
+begin
+  Result := -1;
+  if (cbPlaylists.ItemIndex >= 0) and (cbPlaylists.ItemIndex <= High(FComboMap)) then
+    Result := FComboMap[cbPlaylists.ItemIndex];
+end;
+
+function TMainForm.CurrentKind: Integer;
+begin
+  if FSection = SEC_MOVIES then Result := 1 else Result := 0;
+end;
+
 procedure TMainForm.LoadPlaylist(Index: Integer; ForceEpg: Boolean);
 var
   T: TLoaderThread;
+  Media: Boolean;
 begin
   if (Index < 0) or (Index >= FSettings.PlaylistCount) then Exit;
-  FSettings.LastPlaylist := Index;
-  Inc(FPlGen);
-  FForceEpg := ForceEpg;
+  Media := FSettings.Playlist(Index).Kind = 1;
   T := TLoaderThread.Create;
   T.Kind := lkPlaylist;
+  T.MediaLib := Media;
+  if Media then
+  begin
+    FSettings.LastMediaPlaylist := Index;
+    Inc(FMediaGen);
+    T.Generation := FMediaGen;
+  end
+  else
+  begin
+    FSettings.LastPlaylist := Index;
+    Inc(FPlGen);
+    FForceEpg := ForceEpg;
+    T.Generation := FPlGen;
+  end;
   T.Source := FSettings.Playlist(Index).Source;
   T.CacheDir := FSettings.CacheDir;
-  T.Generation := FPlGen;
   T.OnTerminate := @LoaderDone;
   { есть сохранённая копия — показываем её сразу, а обновляем в фоне }
   T.CacheOnly := (not ForceEpg) and IsRemoteUrl(T.Source) and
@@ -1616,9 +1685,10 @@ begin
   if (Index < 0) or (Index >= FSettings.PlaylistCount) then Exit;
   T := TLoaderThread.Create;
   T.Kind := lkPlaylist;
+  T.MediaLib := FSettings.Playlist(Index).Kind = 1;
+  if T.MediaLib then T.Generation := FMediaGen else T.Generation := FPlGen;
   T.Source := FSettings.Playlist(Index).Source;
   T.CacheDir := FSettings.CacheDir;
-  T.Generation := FPlGen;
   T.Refresh := True;
   T.OnTerminate := @LoaderDone;
   T.Start;
@@ -1658,8 +1728,9 @@ begin
       RefreshGuide;
       Exit;
     end;
-    Key := L.Text + '|' + IntToStr(FSettings.EpgPastDays) + '|' +
-      HashStr(FSettings.Playlist(FSettings.LastPlaylist).Source);
+    Key := L.Text + '|' + IntToStr(FSettings.EpgPastDays) + '|';
+    if (FSettings.LastPlaylist >= 0) and (FSettings.LastPlaylist < FSettings.PlaylistCount) then
+      Key := Key + HashStr(FSettings.Playlist(FSettings.LastPlaylist).Source);
     if (not Force) and (FEpg <> nil) and (FEpgKey = Key) then
     begin
       ResolveEpg;
@@ -1696,8 +1767,48 @@ begin
   if not GFormAlive then Exit;
   T := TLoaderThread(Sender);
 
-  if T.Kind = lkPlaylist then
+  if (T.Kind = lkPlaylist) and T.MediaLib then
   begin
+    { ---- медиатека ---- }
+    if T.Generation <> FMediaGen then Exit;
+    if T.Refresh and ((not T.Ok) or T.Unchanged) then Exit;
+    if not T.Ok then
+    begin
+      if T.CacheOnly then
+      begin
+        LoadPlaylist(FSettings.LastMediaPlaylist, True);
+        Exit;
+      end;
+      SetInfo('');
+      DarkMessage('Не удалось загрузить медиатеку:' + LineEnding + T.ErrorMsg, True);
+      Exit;
+    end;
+    mvView.SetMovies(nil);
+    mvView.Current := nil;
+    FCurMovie := nil;
+    if FVod then FCurrent := nil;
+    FreeAndNil(FMovies);
+    FreeAndNil(FMediaPl);
+    FMediaPl := T.Playlist;
+    T.Playlist := nil;
+    FMovies := T.Movies;
+    T.Movies := nil;
+    if FMovies = nil then FMovies := TMovieLib.Create;
+    if FVod then
+    begin
+      FCurrent := FMediaPl.FindByUrl(FCurrentUrl);
+      FCurMovie := FMovies.FindByUrl(FCurrentUrl);
+    end;
+    mvView.Current := FCurMovie;
+    if (FSection = SEC_MOVIES) and not T.Refresh then FInCategory := False;
+    ApplyFilter;
+    SetInfo(T.Warning);
+    if T.CacheOnly then LoadPlaylistRefresh(FSettings.LastMediaPlaylist);
+    UpdateTransport;
+  end
+  else if T.Kind = lkPlaylist then
+  begin
+    { ---- плейлист ТВ-каналов ---- }
     if T.Generation <> FPlGen then Exit;
     if T.Refresh then
     begin
@@ -1717,7 +1828,7 @@ begin
         Exit;
       end;
       SetInfo('');
-      MessageDlg('Не удалось загрузить плейлист:' + LineEnding + T.ErrorMsg, mtError, [mbOK], 0);
+      DarkMessage('Не удалось загрузить плейлист:' + LineEnding + T.ErrorMsg, True);
       Exit;
     end;
     GuideUrl := '';
@@ -1726,29 +1837,13 @@ begin
     FView.Clear;
     chView.SetChannels(nil);
     chView.Current := nil;
-    FCurrent := nil;
-    mvView.SetMovies(nil);
-    mvView.Current := nil;
-    FCurMovie := nil;
-    FreeAndNil(FMovies);
+    if not FVod then FCurrent := nil;
     FreeAndNil(FPlaylist);
     FPlaylist := T.Playlist;
     T.Playlist := nil;
-    FMovies := T.Movies;
-    T.Movies := nil;
-    if FVod then FCurMovie := FMovies.FindByUrl(FCurrentUrl);
-    mvView.Current := FCurMovie;
-    { переключатель «Каналы | Фильмы» — только если в плейлисте есть фильмы }
-    segMode.Visible := FMovies.Count > 0;
-    if FMovies.Count = 0 then
-      SetMovieMode(False)
-    else if FMovies.Count = FPlaylist.Count then
-      SetMovieMode(True)
-    else if not T.Refresh then
-      SetMovieMode(FSettings.LastMode = 1);
-    if FPlaying then FCurrent := FPlaylist.FindByUrl(FCurrentUrl);
-    chView.Current := FCurrent;
-    if not T.Refresh then FInCategory := False;
+    if FPlaying and not FVod then FCurrent := FPlaylist.FindByUrl(FCurrentUrl);
+    if not FVod then chView.Current := FCurrent;
+    if (FSection = SEC_TV) and not T.Refresh then FInCategory := False;
     ApplyFilter;
     ResolveLogos;
     if GuideUrl <> '' then OpenGuide(FPlaylist.FindByUrl(GuideUrl));
@@ -1762,7 +1857,7 @@ begin
     if not FAutoPlayDone then
     begin
       FAutoPlayDone := True;
-      if FSettings.AutoPlayLast and not FSettings.UseExternalPlayer then
+      if FSettings.AutoPlayLast and not FSettings.UseExternalPlayer and (FSection = SEC_TV) then
       begin
         Ch := FPlaylist.FindByUrl(FSettings.LastUrl);
         if Ch <> nil then
@@ -1813,17 +1908,35 @@ end;
 
 procedure TMainForm.UpdateListVisibility;
 var
-  NoLists, ShowCats: Boolean;
+  NoLists, ShowCats, UseMovies: Boolean;
 begin
-  NoLists := FSettings.PlaylistCount = 0;
+  case FSection of
+    SEC_TV:
+      begin
+        NoLists := FSettings.CountOfKind(0) = 0;
+        lblEmpty.Caption := 'Плейлистов ТВ-каналов пока нет.' + LineEnding + LineEnding +
+          'Нажмите «+», чтобы добавить ссылку на плейлист M3U или файл.';
+      end;
+    SEC_MOVIES:
+      begin
+        NoLists := FSettings.CountOfKind(1) = 0;
+        lblEmpty.Caption := 'Медиатека не добавлена.' + LineEnding + LineEnding +
+          'Нажмите «+», чтобы добавить ссылку на медиатеку (плейлист M3U с фильмами).';
+      end;
+  else
+    NoLists := FSettings.PlaylistCount = 0;
+    lblEmpty.Caption := 'История пуста.';
+  end;
+  UseMovies := FMovieMode or ((FSection = SEC_HISTORY) and (segTabs.ItemIndex = 1));
   ShowCats := FMovieMode and (segTabs.ItemIndex = TAB_CAT) and not FInCategory;
   lblEmpty.Visible := NoLists and not FGuideOpen;
-  chView.Visible := (not NoLists) and not FGuideOpen and ((not FMovieMode) or ShowCats);
-  mvView.Visible := (not NoLists) and not FGuideOpen and FMovieMode and not ShowCats;
-  btnViewList.Visible := not FMovieMode;
-  btnViewCompact.Visible := not FMovieMode;
-  btnViewGrid.Visible := not FMovieMode;
-  btnViewTiles.Visible := not FMovieMode;
+  chView.Visible := (not NoLists) and not FGuideOpen and ((not UseMovies) or ShowCats);
+  mvView.Visible := (not NoLists) and not FGuideOpen and UseMovies and not ShowCats;
+  btnViewList.Visible := not UseMovies;
+  btnViewCompact.Visible := not UseMovies;
+  btnViewGrid.Visible := not UseMovies;
+  btnViewTiles.Visible := not UseMovies;
+  pnlPl.Visible := FSection <> SEC_HISTORY;
 end;
 
 procedure TMainForm.ApplyMovieFilter;
@@ -1899,15 +2012,19 @@ begin
   pnlBack.Visible := (Tab = TAB_CAT) and FInCategory and not FGuideOpen;
   if FInCategory then lblBack.Caption := FCategory;
   try
-    if FPlaylist = nil then
+    if (FPlaylist = nil) and (FSection = SEC_TV) then
     begin
       chView.EmptyText := '';
       chView.SetChannels(nil);
-      mvView.SetMovies(nil);
       lblCount.Caption := '';
       Exit;
     end;
 
+    if FSection = SEC_HISTORY then
+    begin
+      ApplyHistoryFilter;
+      Exit;
+    end;
     if FMovieMode then
     begin
       ApplyMovieFilter;
@@ -2022,8 +2139,8 @@ begin
   Result := False;
   if FVlc = nil then
   begin
-    MessageDlg('Встроенный плеер недоступен.' + LineEnding + FVlcError + LineEnding + LineEnding +
-      'Можно включить внешний плеер в Настройках → Плеер.', mtWarning, [mbOK], 0);
+    DarkMessage('Встроенный плеер недоступен.' + LineEnding + FVlcError + LineEnding + LineEnding +
+      'Можно включить внешний плеер в Настройках → Плеер.');
     Exit;
   end;
   if Pos('://', Url) > 0 then
@@ -2166,9 +2283,9 @@ begin
   Url := BuildArchiveUrl(Ch, FSettings.DefaultCatchup, It.Start, It.Stop, NowUtc);
   if Url = '' then
   begin
-    MessageDlg('Для этого канала архив недоступен.' + LineEnding + LineEnding +
+    DarkMessage('Для этого канала архив недоступен.' + LineEnding + LineEnding +
       'Если провайдер поддерживает архив, но не указал это в плейлисте, ' +
-      'выберите тип архива в Настройках → Источники телепрограмм.', mtInformation, [mbOK], 0);
+      'выберите тип архива в Настройках → Источники телепрограмм.');
     Exit;
   end;
   if FSettings.UseExternalPlayer then
@@ -2202,8 +2319,7 @@ begin
   Exe := FindExternalPlayer(FSettings.ExternalPlayer);
   if Exe = '' then
   begin
-    if MessageDlg('Внешний плеер не найден. Указать программу в настройках?',
-      mtConfirmation, [mbYes, mbNo], 0) = mrYes then
+    if DarkConfirm('Внешний плеер не найден. Указать программу в настройках?') then
       OpenSettings(1);
     Exit;
   end;
@@ -2234,8 +2350,7 @@ begin
       UpdateTransport;
     except
       on E: Exception do
-        MessageDlg('Не удалось запустить внешний плеер:' + LineEnding + Exe + LineEnding + E.Message,
-          mtError, [mbOK], 0);
+        DarkMessage('Не удалось запустить внешний плеер:' + LineEnding + Exe + LineEnding + E.Message, True);
     end;
   finally
     P.Free;
@@ -2424,12 +2539,12 @@ var
 begin
   if Ch = nil then
   begin
-    MessageDlg('Сначала выберите канал.', mtInformation, [mbOK], 0);
+    DarkMessage('Сначала выберите канал.');
     Exit;
   end;
   if FVlc = nil then
   begin
-    MessageDlg('Запись недоступна: ' + FVlcError, mtWarning, [mbOK], 0);
+    DarkMessage('Запись недоступна: ' + FVlcError);
     Exit;
   end;
   if FRecPlayer <> nil then StopRecording('');
@@ -2437,8 +2552,8 @@ begin
   Dir := IncludeTrailingPathDelimiter(FSettings.RecordDir);
   if not ForceDirectories(Dir) then
   begin
-    if MessageDlg('Не удалось создать папку для записей:' + LineEnding + Dir + LineEnding +
-      'Выбрать другую папку в настройках?', mtError, [mbYes, mbNo], 0) = mrYes then
+    if DarkConfirm('Не удалось создать папку для записей:' + LineEnding + Dir + LineEnding +
+      'Выбрать другую папку в настройках?') then
       OpenSettings(2);
     Exit;
   end;
@@ -2494,7 +2609,7 @@ begin
   FRecPlayer := nil;
   lblRec.Caption := '';
   if Reason <> '' then
-    MessageDlg(Reason, mtWarning, [mbOK], 0)
+    DarkMessage(Reason)
   else
     SetInfo('Запись сохранена: ' + FRecFile);
   UpdateTransport;
@@ -2570,7 +2685,7 @@ begin
   if FSettings.LogoDbEnabled then StartLogoDb;
   ResolveLogos;
   if FSettings.SystemFrame <> FSettingsOldFrame then
-    MessageDlg('Вид рамки окна изменится после перезапуска программы.', mtInformation, [mbOK], 0);
+    DarkMessage('Вид рамки окна изменится после перезапуска программы.');
 end;
 
 procedure TMainForm.SettingsPageClose(Sender: TObject);
@@ -2579,21 +2694,31 @@ begin
 end;
 
 procedure TMainForm.ApplyAfterImport;
+var
+  Last: Integer;
 begin
   ApplyViewSettings;
   sldVolume.Position := FSettings.Volume;
   if FSettings.Muted then btnMute.Kind := ikMute else btnMute.Kind := ikVolume;
-  segTabs.ItemIndex := FSettings.LastTab;
   FInCategory := False;
-  RefreshPlaylistCombo;
-  if FSettings.PlaylistCount > 0 then
-    LoadPlaylist(cbPlaylists.ItemIndex, True)
-  else
+  CloseGuide;
+  FreeAndNil(FMovies);
+  FreeAndNil(FMediaPl);
+  mvView.SetMovies(nil);
+  FView.Clear;
+  chView.SetChannels(nil);
+  if not FPlaying then
   begin
-    CloseGuide;
     FreeAndNil(FPlaylist);
-    ApplyFilter;
   end;
+  SetSection(SEC_TV);
+  Last := FSettings.FirstOfKind(0);
+  if (FSettings.LastPlaylist >= 0) and (FSettings.LastPlaylist < FSettings.PlaylistCount) and
+     (FSettings.Playlist(FSettings.LastPlaylist).Kind = 0) then Last := FSettings.LastPlaylist;
+  if Last >= 0 then LoadPlaylist(Last, True);
+  Last := FSettings.FirstOfKind(1);
+  if Last >= 0 then LoadPlaylist(Last, True);
+  UpdateWelcome;
 end;
 
 procedure TMainForm.SettingsPageImported(Sender: TObject);
@@ -2684,6 +2809,8 @@ end;
 { обработчики формы }
 
 procedure TMainForm.FormShow(Sender: TObject);
+var
+  K, Last: Integer;
 begin
   if FShown then Exit;
   FShown := True;
@@ -2693,10 +2820,27 @@ begin
     SetMaximized(True)
   else
     UpdateFrameControls;
-  RefreshPlaylistCombo;
-  ApplyFilter;
-  if FSettings.PlaylistCount > 0 then
-    LoadPlaylist(cbPlaylists.ItemIndex, False);
+  BuildWelcome;
+  { загружаем и ТВ-плейлист, и медиатеку (в фоне) }
+  K := FSettings.LastMode;
+  if (K < SEC_TV) or (K > SEC_HISTORY) then K := SEC_TV;
+  FSection := -1;
+  SetSection(K);
+  if (K <> SEC_TV) and (FPlaylist = nil) then
+  begin
+    Last := FSettings.LastPlaylist;
+    if (Last < 0) or (Last >= FSettings.PlaylistCount) or (FSettings.Playlist(Last).Kind <> 0) then
+      Last := FSettings.FirstOfKind(0);
+    if Last >= 0 then LoadPlaylist(Last, False);
+  end;
+  if (K <> SEC_MOVIES) and (FMediaPl = nil) then
+  begin
+    Last := FSettings.LastMediaPlaylist;
+    if (Last < 0) or (Last >= FSettings.PlaylistCount) or (FSettings.Playlist(Last).Kind <> 1) then
+      Last := FSettings.FirstOfKind(1);
+    if Last >= 0 then LoadPlaylist(Last, False);
+  end;
+  UpdateWelcome;
   StartLogoDb;
 end;
 
@@ -2889,19 +3033,8 @@ begin
 end;
 
 procedure TMainForm.AddClick(Sender: TObject);
-var
-  N, S, E: string;
-  Idx: Integer;
 begin
-  N := '';
-  S := '';
-  E := '';
-  if not EditPlaylist(Self, 'Новый плейлист', N, S, E) then Exit;
-  Idx := FSettings.AddPlaylist(N, S, E);
-  FSettings.LastPlaylist := Idx;
-  FSettings.Save;
-  RefreshPlaylistCombo;
-  LoadPlaylist(Idx, False);
+  AddPlaylistKind(CurrentKind);
 end;
 
 procedure TMainForm.EditClick(Sender: TObject);
@@ -2910,13 +3043,13 @@ var
   P: TPlaylistEntry;
   N, S, E: string;
 begin
-  Idx := cbPlaylists.ItemIndex;
+  Idx := ComboIndex;
   if Idx < 0 then Exit;
   P := FSettings.Playlist(Idx);
   N := P.Name;
   S := P.Source;
   E := P.Epg;
-  if not EditPlaylist(Self, 'Изменить плейлист', N, S, E) then Exit;
+  if not DarkEditPlaylist('Изменить плейлист', P.Kind, N, S, E) then Exit;
   P.Name := N;
   P.Source := S;
   P.Epg := E;
@@ -2927,36 +3060,57 @@ end;
 
 procedure TMainForm.RemoveClick(Sender: TObject);
 var
-  Idx: Integer;
+  Idx, K: Integer;
 begin
-  Idx := cbPlaylists.ItemIndex;
+  Idx := ComboIndex;
   if Idx < 0 then Exit;
-  if MessageDlg('Удалить плейлист «' + FSettings.Playlist(Idx).Name + '» из списка?',
-    mtConfirmation, [mbYes, mbNo], 0) <> mrYes then Exit;
+  if not DarkConfirm('Удалить плейлист «' + FSettings.Playlist(Idx).Name + '» из списка?', 'Удалить') then Exit;
+  K := FSettings.Playlist(Idx).Kind;
   FSettings.DeletePlaylist(Idx);
-  FSettings.LastPlaylist := 0;
+  { индексы после удалённого сдвигаются }
+  if FSettings.LastPlaylist > Idx then Dec(FSettings.LastPlaylist)
+  else if FSettings.LastPlaylist = Idx then FSettings.LastPlaylist := -1;
+  if FSettings.LastMediaPlaylist > Idx then Dec(FSettings.LastMediaPlaylist)
+  else if FSettings.LastMediaPlaylist = Idx then FSettings.LastMediaPlaylist := -1;
   FSettings.Save;
   RefreshPlaylistCombo;
-  if FSettings.PlaylistCount > 0 then
-    LoadPlaylist(cbPlaylists.ItemIndex, False)
+  if ComboIndex >= 0 then
+    LoadPlaylist(ComboIndex, False)
+  else if K = 1 then
+  begin
+    Inc(FMediaGen);
+    mvView.SetMovies(nil);
+    mvView.Current := nil;
+    if FVod then StopPlayback;
+    FCurMovie := nil;
+    FreeAndNil(FMovies);
+    FreeAndNil(FMediaPl);
+    ApplyFilter;
+  end
   else
   begin
     Inc(FPlGen);
     Inc(FEpgGen);
+    CloseGuide;
     FView.Clear;
     chView.SetChannels(nil);
     chView.Current := nil;
-    FCurrent := nil;
+    if not FVod then
+    begin
+      if FPlaying then StopPlayback;
+      FCurrent := nil;
+    end;
     FreeAndNil(FPlaylist);
     ApplyFilter;
     SetInfo('');
   end;
+  UpdateWelcome;
 end;
 
 procedure TMainForm.ReloadClick(Sender: TObject);
 begin
-  if cbPlaylists.ItemIndex >= 0 then
-    LoadPlaylist(cbPlaylists.ItemIndex, True);
+  if ComboIndex >= 0 then
+    LoadPlaylist(ComboIndex, True);
 end;
 
 procedure TMainForm.PrevClick(Sender: TObject);
@@ -3044,7 +3198,7 @@ end;
 procedure TMainForm.PlaylistChange(Sender: TObject);
 begin
   if FUpdating then Exit;
-  LoadPlaylist(cbPlaylists.ItemIndex, False);
+  LoadPlaylist(ComboIndex, False);
 end;
 
 procedure TMainForm.SearchChange(Sender: TObject);
@@ -3515,6 +3669,7 @@ begin
   if WindowState = wsMinimized then Exit;
   UpdateSideMax;
   if FSettingsOpen then PlaceSettings;
+  if (pnlWelcome <> nil) and pnlWelcome.Visible then UpdateWelcome;
   if (pnlBottom <> nil) and (pnlMain <> nil) and pnlBottom.Visible then
   begin
     M := pnlMain.ClientHeight - 140;
@@ -3550,34 +3705,217 @@ begin
   Result := (M <> nil) and FSettings.IsFavorite(M.Url);
 end;
 
-procedure TMainForm.SetMovieMode(Value: Boolean);
+procedure TMainForm.SetSection(Value: Integer);
+var
+  K: Integer;
 begin
-  if Value and ((FMovies = nil) or (FMovies.Count = 0)) then Value := False;
+  if FWall then SetChannelWall(False);
   CloseGuide;
-  if FMovieMode <> Value then
-  begin
-    FMovieMode := Value;
-    FInCategory := False;
+  if FSection <> Value then FInCategory := False;
+  FSection := Value;
+  FMovieMode := Value = SEC_MOVIES;
+  btnRailTv.Checked := Value = SEC_TV;
+  btnRailMovies.Checked := Value = SEC_MOVIES;
+  btnRailHistory.Checked := Value = SEC_HISTORY;
+  segTabs.Items.Clear;
+  case Value of
+    SEC_TV:
+      begin
+        segTabs.Items.Add('Избранное');
+        segTabs.Items.Add('Все каналы');
+        segTabs.Items.Add('Категории');
+        segTabs.ItemIndex := TAB_ALL;
+        edSearch.TextHint := 'Поиск канала (Ctrl+F)';
+      end;
+    SEC_MOVIES:
+      begin
+        segTabs.Items.Add('Избранное');
+        segTabs.Items.Add('Все фильмы');
+        segTabs.Items.Add('Категории');
+        segTabs.ItemIndex := TAB_ALL;
+        edSearch.TextHint := 'Поиск фильма (Ctrl+F)';
+      end;
+  else
+    segTabs.Items.Add('Каналы');
+    segTabs.Items.Add('Фильмы');
+    segTabs.ItemIndex := 0;
+    edSearch.TextHint := 'Поиск в истории (Ctrl+F)';
   end;
-  if Value then segMode.ItemIndex := 1 else segMode.ItemIndex := 0;
-  if Value then
+  segTabs.Invalidate;
+  FSettings.LastMode := Value;
+  RefreshPlaylistCombo;
+  { данные раздела загружаем по требованию }
+  K := ComboIndex;
+  if (Value = SEC_TV) and (FPlaylist = nil) and (K >= 0) then LoadPlaylist(K, False);
+  if (Value = SEC_MOVIES) and (FMediaPl = nil) and (K >= 0) then LoadPlaylist(K, False);
+  ApplyFilter;
+  chView.ScrollToTop;
+  mvView.ScrollToTop;
+end;
+
+procedure TMainForm.RailClick(Sender: TObject);
+begin
+  if FSettingsOpen then CloseSettings;
+  SetSection(TFlatButton(Sender).Tag);
+end;
+
+procedure TMainForm.ApplyHistoryFilter;
+var
+  i: Integer;
+  Ch: TChannel;
+  M: TMovie;
+  Q: string;
+begin
+  Q := UTF8LowerCase(Trim(edSearch.Text));
+  if segTabs.ItemIndex = 0 then
   begin
-    segTabs.Items[1] := 'Все фильмы';
-    edSearch.TextHint := 'Поиск фильма (Ctrl+F)';
+    if FPlaylist <> nil then
+      for i := 0 to FSettings.Recent.Count - 1 do
+      begin
+        Ch := FPlaylist.FindByUrl(FSettings.Recent[i]);
+        if (Ch <> nil) and ((Q = '') or (Pos(Q, Ch.NameLower) > 0)) then FView.Add(Ch);
+      end;
+    chView.EmptyText := 'Вы ещё не смотрели каналы';
+    chView.SetChannels(FView);
+    lblCount.Caption := Format('Каналов: %d', [FView.Count]);
   end
   else
   begin
-    segTabs.Items[1] := 'Все каналы';
-    edSearch.TextHint := 'Поиск (Ctrl+F)';
+    FMovieList.Clear;
+    if FMovies <> nil then
+      for i := 0 to FSettings.Recent.Count - 1 do
+      begin
+        M := FMovies.FindByUrl(FSettings.Recent[i]);
+        if (M <> nil) and (FMovieList.IndexOf(M) < 0) and ((Q = '') or (Pos(Q, M.TitleLower) > 0)) then
+          FMovieList.Add(M);
+      end;
+    mvView.EmptyText := 'Вы ещё не смотрели фильмы';
+    mvView.SetMovies(FMovieList);
+    lblCount.Caption := Format('Фильмов: %d', [FMovieList.Count]);
   end;
-  segTabs.Invalidate;
-  FSettings.LastMode := Ord(Value);
-  ApplyFilter;
 end;
 
-procedure TMainForm.ModeChange(Sender: TObject);
+{ ---------- плейлисты: добавление, экран приветствия ---------- }
+
+procedure TMainForm.AddPlaylistKind(AKind: Integer);
+var
+  N, S, E, T: string;
+  Idx: Integer;
 begin
-  SetMovieMode(segMode.ItemIndex = 1);
+  N := '';
+  S := '';
+  E := '';
+  if AKind = 1 then T := 'Добавить медиатеку' else T := 'Добавить плейлист ТВ-каналов';
+  if not DarkEditPlaylist(T, AKind, N, S, E) then Exit;
+  Idx := FSettings.AddPlaylist(N, S, E, AKind);
+  if AKind = 1 then FSettings.LastMediaPlaylist := Idx else FSettings.LastPlaylist := Idx;
+  FSettings.Save;
+  UpdateWelcome;
+  if AKind = 1 then SetSection(SEC_MOVIES) else SetSection(SEC_TV);
+  RefreshPlaylistCombo;
+  LoadPlaylist(Idx, False);
+end;
+
+procedure TMainForm.BuildWelcome;
+var
+  L: TLabel;
+  B: TFlatButton;
+  Y: Integer;
+begin
+  pnlWelcome := MakePanel(pnlRoot, alNone, clrBg, 0);
+  pnlWelcome.Visible := False;
+  Y := 0;
+  L := TLabel.Create(Self);
+  L.Parent := pnlWelcome;
+  L.Caption := 'Добро пожаловать в IPTV Aristocrat';
+  L.Font.Size := 20;
+  L.Font.Style := [fsBold];
+  L.Font.Color := clrText;
+  L.Tag := 1;
+  L.Top := Y;
+  L := TLabel.Create(Self);
+  L.Parent := pnlWelcome;
+  L.Caption := 'Для начала добавьте плейлист от вашего провайдера.';
+  L.Font.Size := 11;
+  L.Font.Color := clrDim;
+  L.Tag := 2;
+  B := TFlatButton.Create(Self);
+  B.Parent := pnlWelcome;
+  B.Bordered := True;
+  B.Checked := True;
+  B.Kind := ikNone;
+  B.Caption := 'Добавить плейлист ТВ-каналов';
+  B.Font.Size := 11;
+  B.Tag := 3;
+  B.OnClick := @WelcomeTvClick;
+  B := TFlatButton.Create(Self);
+  B.Parent := pnlWelcome;
+  B.Bordered := True;
+  B.Caption := 'Добавить медиатеку (фильмы)';
+  B.Font.Size := 11;
+  B.Tag := 4;
+  B.OnClick := @WelcomeMediaClick;
+  L := TLabel.Create(Self);
+  L.Parent := pnlWelcome;
+  L.Caption := 'Медиатеку можно добавить и позже — в разделе «Фильмы» на панели слева.';
+  L.Font.Size := 9;
+  L.Font.Color := clrDim;
+  L.Tag := 5;
+  B := TFlatButton.Create(Self);
+  B.Parent := pnlWelcome;
+  B.Caption := 'Восстановить из резервной копии (.aristocrat)';
+  B.IconColor := clrDim;
+  B.Tag := 6;
+  B.OnClick := @WelcomeImportClick;
+end;
+
+procedure TMainForm.UpdateWelcome;
+var
+  i, T, CX, CY: Integer;
+  C: TControl;
+begin
+  if pnlWelcome = nil then Exit;
+  if FSettings.PlaylistCount > 0 then
+  begin
+    pnlWelcome.Visible := False;
+    Exit;
+  end;
+  T := 0;
+  if pnlTitle.Visible then T := pnlTitle.Top + pnlTitle.Height;
+  pnlWelcome.SetBounds(0, T, pnlRoot.ClientWidth, Math.Max(100, pnlRoot.ClientHeight - T));
+  CX := pnlWelcome.Width div 2;
+  CY := pnlWelcome.Height div 2 - 140;
+  for i := 0 to pnlWelcome.ControlCount - 1 do
+  begin
+    C := pnlWelcome.Controls[i];
+    case C.Tag of
+      1: C.SetBounds(CX - 300, CY, 600, 40);
+      2: C.SetBounds(CX - 300, CY + 50, 600, 24);
+      3: C.SetBounds(CX - 300, CY + 100, 600, 56);
+      4: C.SetBounds(CX - 300, CY + 168, 600, 56);
+      5: C.SetBounds(CX - 300, CY + 236, 600, 24);
+      6: C.SetBounds(CX - 300, CY + 280, 600, 36);
+    end;
+    if C is TLabel then TLabel(C).Alignment := taCenter;
+    if C is TLabel then TLabel(C).AutoSize := False;
+  end;
+  pnlWelcome.Visible := True;
+  pnlWelcome.BringToFront;
+end;
+
+procedure TMainForm.WelcomeTvClick(Sender: TObject);
+begin
+  AddPlaylistKind(0);
+end;
+
+procedure TMainForm.WelcomeMediaClick(Sender: TObject);
+begin
+  AddPlaylistKind(1);
+end;
+
+procedure TMainForm.WelcomeImportClick(Sender: TObject);
+begin
+  OpenSettings(SEC_BACKUP);
 end;
 
 procedure TMainForm.PlayMovie(M: TMovie; SourceIndex: Integer);

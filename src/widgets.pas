@@ -41,7 +41,8 @@ type
   TIconKind = (ikNone, ikPlay, ikStop, ikPrev, ikNext, ikVolume, ikMute,
     ikFullscreen, ikStar, ikPlus, ikMinus, ikRefresh, ikEdit, ikRecord,
     ikBack, ikChevron, ikViewList, ikViewCompact, ikViewGrid, ikViewTiles,
-    ikWinMin, ikWinMax, ikWinRestore, ikClose, ikSettings, ikExternal, ikUp, ikDown, ikWall, ikPause);
+    ikWinMin, ikWinMax, ikWinRestore, ikClose, ikSettings, ikExternal, ikUp, ikDown, ikWall, ikPause,
+    ikTv, ikFilm, ikHistory);
 
   TFlatButton = class(TGraphicControl)
   private
@@ -358,6 +359,38 @@ begin
         C.Pen.Width := 2;
         C.Polyline([Point(cx - s, cy - s div 2), Point(cx, cy + s div 2), Point(cx + s, cy - s div 2)]);
       end;
+    ikTv:
+      begin
+        C.Pen.Width := 2;
+        C.Brush.Style := bsClear;
+        C.RoundRect(cx - s - 2, cy - s + 1, cx + s + 3, cy + s - 2, 4, 4);
+        C.Line(cx - s div 2, cy + s + 2, cx + s div 2 + 1, cy + s + 2);
+      end;
+    ikFilm:
+      begin
+        C.Pen.Width := 2;
+        C.Brush.Style := bsClear;
+        C.Rectangle(cx - s, cy - s, cx + s + 1, cy + s + 1);
+        C.Brush.Style := bsSolid;
+        C.Pen.Width := 1;
+        for i := 0 to 2 do
+        begin
+          C.Rectangle(cx - s + 2, cy - s + 3 + i * (2 * s - 4) div 2, cx - s + 5, cy - s + 6 + i * (2 * s - 4) div 2);
+          C.Rectangle(cx + s - 4, cy - s + 3 + i * (2 * s - 4) div 2, cx + s - 1, cy - s + 6 + i * (2 * s - 4) div 2);
+        end;
+        C.Polygon([Point(cx - 2, cy - s div 2), Point(cx - 2, cy + s div 2), Point(cx + s div 2, cy)]);
+      end;
+    ikHistory:
+      begin
+        C.Pen.Width := 2;
+        C.Brush.Style := bsClear;
+        C.Arc(cx - s, cy - s, cx + s + 1, cy + s + 1, 150 * 16, 300 * 16);
+        C.Line(cx, cy - s div 2, cx, cy);
+        C.Line(cx, cy, cx + s div 2, cy + s div 3);
+        C.Brush.Style := bsSolid;
+        C.Pen.Width := 1;
+        C.Polygon([Point(cx - s - 4, cy - 3), Point(cx - s + 3, cy - 3), Point(cx - s, cy + 3)]);
+      end;
     ikPause:
       begin
         C.Rectangle(cx - s + 1, cy - s, cx - 1, cy + s + 1);
@@ -435,8 +468,18 @@ begin
   end
   else if FBordered then
   begin
-    if FHover then Canvas.Brush.Color := clrHover else Canvas.Brush.Color := clrCard;
-    Canvas.Pen.Color := clrFrame;
+    if FChecked then
+    begin
+      { главная кнопка — залита акцентным цветом }
+      if FHover then Canvas.Brush.Color := BlendColor(clrAccent, clWhite, 0.12)
+      else Canvas.Brush.Color := clrAccent;
+      Canvas.Pen.Color := Canvas.Brush.Color;
+    end
+    else
+    begin
+      if FHover then Canvas.Brush.Color := clrHover else Canvas.Brush.Color := clrCard;
+      Canvas.Pen.Color := clrFrame;
+    end;
     Canvas.RoundRect(R.Left + 1, R.Top + 1, R.Right - 1, R.Bottom - 1, 8, 8);
   end
   else if Enabled and (FHover or FDown) then
@@ -473,6 +516,11 @@ begin
     Canvas.Font.Color := clrText;
     Canvas.Brush.Style := bsClear;
     if FNavStyle and FChecked then Canvas.Font.Style := [fsBold];
+    if FBordered and FChecked then
+    begin
+      Canvas.Font.Color := clrBg;
+      Canvas.Font.Style := [fsBold];
+    end;
     if not Enabled then Canvas.Font.Color := clrDisabled;
     TH := Canvas.TextHeight(Caption);
     if FKind = ikNone then

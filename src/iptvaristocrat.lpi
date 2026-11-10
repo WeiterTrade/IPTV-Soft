@@ -71,7 +71,7 @@
         <IsPartOfProject Value="True"/>
       </Unit>
       <Unit>
-        <Filename Value="playlistdlg.pas"/>
+        <Filename Value="darkdlg.pas"/>
         <IsPartOfProject Value="True"/>
       </Unit>
       <Unit>

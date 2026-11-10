@@ -80,7 +80,7 @@ type
 implementation
 
 uses
-  LCLIntf, catchup;
+  LCLIntf, catchup, darkdlg;
 
 const
   X0 = 40;        { левый отступ содержимого }
@@ -570,9 +570,9 @@ begin
     D.Options := D.Options + [ofOverwritePrompt];
     if not D.Execute then Exit;
     if FS.ExportTo(D.FileName, Err) then
-      MessageDlg('Конфигурация сохранена:' + LineEnding + D.FileName, mtInformation, [mbOK], 0)
+      DarkMessage('Конфигурация сохранена:' + LineEnding + D.FileName)
     else
-      MessageDlg('Не удалось сохранить файл: ' + Err, mtError, [mbOK], 0);
+      DarkMessage('Не удалось сохранить файл: ' + Err, True);
   finally
     D.Free;
   end;
@@ -588,16 +588,15 @@ begin
     D.Title := 'Импорт конфигурации';
     D.Filter := 'Конфигурация IPTV Aristocrat (*.aristocrat)|*.aristocrat|Все файлы|*';
     if not D.Execute then Exit;
-    if MessageDlg('Текущие плейлисты, избранное и настройки будут заменены данными из файла. Продолжить?',
-      mtConfirmation, [mbYes, mbNo], 0) <> mrYes then Exit;
+    if not DarkConfirm('Текущие плейлисты, избранное и настройки будут заменены данными из файла. Продолжить?') then Exit;
     if FS.ImportFrom(D.FileName, Err) then
     begin
       LoadValues;
       if Assigned(FOnImported) then FOnImported(Self);
-      MessageDlg('Конфигурация загружена.', mtInformation, [mbOK], 0);
+      DarkMessage('Конфигурация загружена.');
     end
     else
-      MessageDlg('Не удалось загрузить конфигурацию: ' + Err, mtError, [mbOK], 0);
+      DarkMessage('Не удалось загрузить конфигурацию: ' + Err, True);
   finally
     D.Free;
   end;
@@ -605,8 +604,7 @@ end;
 
 procedure TSettingsPage.ClearLogosClick(Sender: TObject);
 begin
-  if MessageDlg('Удалить сохранённые логотипы? Они будут скачаны заново.',
-    mtConfirmation, [mbYes, mbNo], 0) <> mrYes then Exit;
+  if not DarkConfirm('Удалить сохранённые логотипы? Они будут скачаны заново.') then Exit;
   if Assigned(FOnClearLogos) then FOnClearLogos(Self);
 end;
 
