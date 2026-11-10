@@ -6,10 +6,10 @@ unit mainform;
 interface
 
 uses
-  Classes, SysUtils, Types, Forms, Controls, Graphics, StdCtrls, ExtCtrls,
+  Classes, LCLIntf, SysUtils, Types, Forms, Controls, Graphics, StdCtrls, ExtCtrls,
   Menus, Dialogs, LCLType, Clipbrd, Math, LazUTF8, FileUtil, Process,
   m3u, epg, vlcdyn, netload, appsettings, widgets, videohost,
-  channelview, logos, winframe, settingspage, applog, guideview, catchup, logodb, movies, movieview, darkdlg, moviepage, movieinfo, applogo;
+  channelview, logos, winframe, settingspage, applog, guideview, catchup, logodb, movies, movieview, darkdlg, moviepage, movieinfo, applogo, downloads, contnrs, darkmenu;
 
 type
   TLoadKind = (lkPlaylist, lkEpg);
@@ -106,7 +106,13 @@ type
     FMediaGen: Integer;
     FComboMap: array of Integer;
     pnlRail: TPanel;
-    btnRailTv, btnRailMovies, btnRailHistory, btnRailSettings: TFlatButton;
+    btnRailTv, btnRailMovies, btnRailHistory, btnRailSettings, btnRailRecords, btnRailDownloads: TFlatButton;
+    { записи и скачанные фильмы }
+    FDownloads: TDownloadManager;
+    FLocalAll: TFPObjectList; { все созданные элементы (владелец; живут до закрытия) }
+    pmLocal: TPopupMenu;
+    miLPlay, miLFolder, miLDelete, miLCancel, miLRetry: TMenuItem;
+    miMDownload: TMenuItem;
     pnlWelcome: TPanel;
     mvView: TMovieView;
     pnlSeek: TPanel;
@@ -321,6 +327,20 @@ type
     procedure MenuRecordClick(Sender: TObject);
     procedure MenuFavClick(Sender: TObject);
     procedure MenuCopyClick(Sender: TObject);
+    procedure ApplyLocalFilter;
+    function LocalDir: string;
+    procedure UpdateDownloadTexts;
+    procedure DownloadMovie(M: TMovie; SourceIndex: Integer);
+    procedure MoviePageDownload(Sender: TObject);
+    procedure MovieMenuDownload(Sender: TObject);
+    procedure LocalMenuPopup(Sender: TObject);
+    procedure LocalPlayClick(Sender: TObject);
+    procedure LocalFolderClick(Sender: TObject);
+    procedure LocalDeleteClick(Sender: TObject);
+    procedure LocalCancelClick(Sender: TObject);
+    procedure LocalRetryClick(Sender: TObject);
+    procedure DeleteLocal(Ch: TChannel);
+    procedure FormCloseQuery(Sender: TObject; var CanClose: Boolean);
     function TvEntry: TPlaylistEntry;
     function MenuCategory: string;
     procedure MarkChannelFlags;
@@ -352,6 +372,8 @@ const
   SEC_TV = 0;
   SEC_MOVIES = 1;
   SEC_HISTORY = 2;
+  SEC_RECORDS = 3;
+  SEC_DOWNLOADS = 4;
   TAB_FAV = 0;
   TAB_ALL = 1;
   TAB_CAT = 2;
@@ -704,6 +726,7 @@ begin
   KeyPreview := True;
   OnShow := @FormShow;
   OnClose := @FormClose;
+  OnCloseQuery := @FormCloseQuery;
   OnKeyDown := @FormKeyDown;
   OnResize := @FormResize;
   OnWindowStateChange := @FormWindowStateChange;
@@ -740,6 +763,8 @@ begin
 
   Log('настройки: ' + FSettings.ConfigDir);
   FLogos := TLogoCache.Create(FSettings.CacheDir);
+  FDownloads := TDownloadManager.Create(IncludeTrailingPathDelimiter(FSettings.ConfigDir) + 'media.ini');
+  FLocalAll := TFPObjectList.Create(True);
   FLogos.SetUseProxy(FSettings.LogoProxy);
 
   Log('построение интерфейса');
@@ -769,6 +794,12 @@ var
 begin
   GFormAlive := False;
   FreeAndNil(FLogoBmp);
+  if FDownloads <> nil then
+  begin
+    FDownloads.StopAll;
+    if not FDownloads.Busy then FreeAndNil(FDownloads);
+  end;
+  if (FDownloads = nil) then FreeAndNil(FLocalAll);
   if FRecPlayer <> nil then
   begin
     libvlc_media_player_stop(FRecPlayer);
@@ -917,6 +948,16 @@ begin
   btnRailTv.NavStyle := True;
   btnRailMovies.NavStyle := True;
   btnRailHistory.NavStyle := True;
+  btnRailRecords := MakeButton(pnlRail, ikRecord, alTop, 'Записи эфира', @RailClick);
+  btnRailRecords.Tag := SEC_RECORDS;
+  btnRailRecords.Top := 300;
+  btnRailRecords.Height := 50;
+  btnRailRecords.NavStyle := True;
+  btnRailDownloads := MakeButton(pnlRail, ikDownload, alTop, 'Скачанные фильмы', @RailClick);
+  btnRailDownloads.Tag := SEC_DOWNLOADS;
+  btnRailDownloads.Top := 400;
+  btnRailDownloads.Height := 50;
+  btnRailDownloads.NavStyle := True;
   btnRailTv.BorderSpacing.Top := 8;
 
   if FSystemFrame then
@@ -1104,7 +1145,34 @@ begin
   miMCopy.Caption := 'Копировать ссылку';
   miMCopy.OnClick := @MovieMenuCopy;
   pmMovie.Items.Add(miMCopy);
+  miMDownload := TMenuItem.Create(pmMovie);
+  miMDownload.Caption := 'Скачать фильм';
+  miMDownload.OnClick := @MovieMenuDownload;
+  pmMovie.Items.Add(miMDownload);
   mvView.PopupMenu := pmMovie;
+  pmLocal := TPopupMenu.Create(Self);
+  pmLocal.OnPopup := @LocalMenuPopup;
+  miLPlay := TMenuItem.Create(pmLocal);
+  miLPlay.Caption := 'Смотреть';
+  miLPlay.OnClick := @LocalPlayClick;
+  pmLocal.Items.Add(miLPlay);
+  miLFolder := TMenuItem.Create(pmLocal);
+  miLFolder.Caption := 'Открыть папку с файлом';
+  miLFolder.OnClick := @LocalFolderClick;
+  pmLocal.Items.Add(miLFolder);
+  miLCancel := TMenuItem.Create(pmLocal);
+  miLCancel.Caption := 'Отменить загрузку';
+  miLCancel.OnClick := @LocalCancelClick;
+  pmLocal.Items.Add(miLCancel);
+  miLRetry := TMenuItem.Create(pmLocal);
+  miLRetry.Caption := 'Скачать заново';
+  miLRetry.OnClick := @LocalRetryClick;
+  pmLocal.Items.Add(miLRetry);
+  pmLocal.Items.AddSeparator;
+  miLDelete := TMenuItem.Create(pmLocal);
+  miLDelete.Caption := 'Удалить файл (Del)';
+  miLDelete.OnClick := @LocalDeleteClick;
+  pmLocal.Items.Add(miLDelete);
 
   { телепрограмма канала (вместо списка каналов) }
   pnlGuide := MakePanel(pnlSide, alClient, clrSide, 0);
@@ -1189,6 +1257,7 @@ begin
   miRestore.Caption := 'Вернуть удалённые каналы';
   miRestore.OnClick := @MenuRestoreClick;
   pmChannel.Items.Add(miRestore);
+  StyleMenu(pmChannel);
   chView.PopupMenu := pmChannel;
 
   { ---------- основная часть ---------- }
@@ -1298,6 +1367,7 @@ begin
     pmAspect.Items.Add(miAsp);
   end;
   pmAspect.Items[0].Checked := True;
+  StyleMenu(pmAspect);
   btnAspect.PopupMenu := pmAspect;
   btnFull := MakeButton(pnlControls, ikFullscreen, alRight, 'На весь экран без рамок (F11, двойной щелчок)', @FullClick);
   btnFull.Left := 3000;
@@ -2205,6 +2275,11 @@ begin
         lblEmpty.Caption := 'Медиатека не добавлена.' + LineEnding + LineEnding +
           'Нажмите «+», чтобы добавить ссылку на медиатеку (плейлист M3U с фильмами).';
       end;
+    SEC_RECORDS, SEC_DOWNLOADS:
+      begin
+        NoLists := False;
+        lblEmpty.Caption := '';
+      end;
   else
     NoLists := FSettings.PlaylistCount = 0;
     lblEmpty.Caption := 'История пуста.';
@@ -2218,7 +2293,7 @@ begin
   btnViewCompact.Visible := not UseMovies;
   btnViewGrid.Visible := not UseMovies;
   btnViewTiles.Visible := not UseMovies;
-  pnlPl.Visible := FSection <> SEC_HISTORY;
+  pnlPl.Visible := FSection in [SEC_TV, SEC_MOVIES];
 end;
 
 procedure TMainForm.ApplyMovieFilter;
@@ -2305,6 +2380,11 @@ begin
     if FSection = SEC_HISTORY then
     begin
       ApplyHistoryFilter;
+      Exit;
+    end;
+    if FSection in [SEC_RECORDS, SEC_DOWNLOADS] then
+    begin
+      ApplyLocalFilter;
       Exit;
     end;
     if FMovieMode then
@@ -2545,7 +2625,7 @@ end;
 
 procedure TMainForm.PlayChannel(Ch: TChannel; ForceInternal: Boolean);
 begin
-  if Ch = nil then Exit;
+  if (Ch = nil) or (Ch.URL = '') then Exit;
   if Ch.Locked and not AskParent then Exit;
   if FSettings.UseExternalPlayer and not ForceInternal then
   begin
@@ -3248,10 +3328,10 @@ begin
         Key := 0;
       end;
     VK_DELETE:
-      if (not InEdit) and (Shift = []) and not FMovieMode and (FSection = SEC_TV) and
-         (chView.SelectedChannel <> nil) then
+      if (not InEdit) and (Shift = []) and (chView.SelectedChannel <> nil) then
       begin
-        HideChannel(chView.SelectedChannel);
+        if FSection = SEC_TV then HideChannel(chView.SelectedChannel)
+        else if FSection in [SEC_RECORDS, SEC_DOWNLOADS] then DeleteLocal(chView.SelectedChannel);
         Key := 0;
       end;
     VK_A:
@@ -3542,6 +3622,7 @@ begin
     Exit;
   end;
   Ch := chView.ChannelAt(Index);
+  if (Ch <> nil) and (Ch.URL = '') then Exit;   { фильм ещё скачивается }
   UpdateTransport;
   if FWall and (Ch <> nil) then
   begin
@@ -3770,6 +3851,15 @@ var
   S: string;
   Len, Tm: Int64;
 begin
+  if FDownloads <> nil then
+  begin
+    if FDownloads.Poll then
+    begin
+      if FSection = SEC_DOWNLOADS then ApplyFilter;
+    end
+    else if (FSection = SEC_DOWNLOADS) and (FDownloads.ActiveCount > 0) then
+      UpdateDownloadTexts;
+  end;
   FNowUtc := NowUtc;
   chView.NowUtc := FNowUtc;
   guide.NowUtc := FNowUtc;
@@ -4042,6 +4132,12 @@ begin
   btnRailTv.Checked := Value = SEC_TV;
   btnRailMovies.Checked := Value = SEC_MOVIES;
   btnRailHistory.Checked := Value = SEC_HISTORY;
+  btnRailRecords.Checked := Value = SEC_RECORDS;
+  btnRailDownloads.Checked := Value = SEC_DOWNLOADS;
+  if Value in [SEC_RECORDS, SEC_DOWNLOADS] then
+    chView.PopupMenu := pmLocal
+  else
+    chView.PopupMenu := pmChannel;
   segTabs.Items.Clear;
   case Value of
     SEC_TV:
@@ -4058,6 +4154,20 @@ begin
         segTabs.Items.Add('Все фильмы');
         segTabs.Items.Add('Категории');
         segTabs.ItemIndex := TAB_ALL;
+        edSearch.TextHint := 'Поиск фильма (Ctrl+F)';
+      end;
+    SEC_RECORDS:
+      begin
+        segTabs.Items.Add('Все записи');
+        segTabs.ItemIndex := 0;
+        edSearch.TextHint := 'Поиск записи (Ctrl+F)';
+      end;
+    SEC_DOWNLOADS:
+      begin
+        segTabs.Items.Add('Скачанные');
+        segTabs.Items.Add('Загружаются');
+        segTabs.ItemIndex := 0;
+        if (FDownloads <> nil) and (FDownloads.ActiveCount > 0) then segTabs.ItemIndex := 1;
         edSearch.TextHint := 'Поиск фильма (Ctrl+F)';
       end;
   else
@@ -4375,6 +4485,7 @@ begin
       pgMovie.OnPlay := @MoviePagePlay;
       pgMovie.OnBack := @MoviePageBack;
       pgMovie.OnFav := @MoviePageFav;
+      pgMovie.OnDownload := @MoviePageDownload;
     end;
     if M.InfoState = 0 then
     begin
@@ -4386,6 +4497,11 @@ begin
     end;
     pgMovie.SetMovie(M);
     pgMovie.SetFavorite(IsMovieFav(M));
+    if (M.Sources.Count > 0) and (FDownloads.FindByUrl(TChannel(M.Sources[0]).URL) <> nil) and
+       (FDownloads.FindByUrl(TChannel(M.Sources[0]).URL).State in [dsQueued, dsRunning]) then
+      pgMovie.SetDownloadCaption('Скачивается...')
+    else
+      pgMovie.SetDownloadCaption('Скачать');
     FMoviePageOpen := True;
     PlaceMoviePage;
     if FSlot >= 0 then FSlots[FSlot].Visible := False;
@@ -4467,6 +4583,7 @@ var
 begin
   FMenuMovie := mvView.SelectedMovie;
   miMSources.Clear;
+  StyleMenu(pmMovie);
   miMPlay.Enabled := FMenuMovie <> nil;
   miMFav.Enabled := FMenuMovie <> nil;
   miMCopy.Enabled := FMenuMovie <> nil;
@@ -4485,6 +4602,7 @@ begin
     Mi.Checked := (Src = FCurrent) and FVod;
     miMSources.Add(Mi);
   end;
+  StyleMenu(TPopupMenu(Sender));
 end;
 
 procedure TMainForm.MovieMenuPlay(Sender: TObject);
@@ -4545,6 +4663,7 @@ begin
   end;
   miPin.Visible := FSettings.ParentPin <> '';
   miRestore.Visible := (TvEntry <> nil) and (TvEntry.Hidden.Count > 0);
+  StyleMenu(TPopupMenu(Sender));
 end;
 
 { ---------- родительский контроль и удаление из списка ---------- }
@@ -4781,6 +4900,274 @@ procedure TMainForm.MenuCopyClick(Sender: TObject);
 begin
   if chView.SelectedChannel <> nil then
     Clipboard.AsText := chView.SelectedChannel.URL;
+end;
+
+{ ---------- записи эфира и скачанные фильмы ---------- }
+
+function TMainForm.LocalDir: string;
+begin
+  if FSection = SEC_RECORDS then Result := FSettings.RecordDir else Result := FSettings.DownloadDir;
+end;
+
+function DownloadText(It: TDownloadItem): string;
+begin
+  case It.State of
+    dsQueued: Result := 'В очереди на скачивание';
+    dsRunning:
+      if It.Parts > 0 then
+        Result := 'Скачивается ' + IntToStr(Round(It.PartsDone * 100.0 / It.Parts)) + '%  ·  ' +
+          SizeText(It.Done) + '  ·  часть ' + IntToStr(It.PartsDone) + ' из ' + IntToStr(It.Parts)
+      else if It.Total > 0 then
+        Result := 'Скачивается ' + IntToStr(Round(It.Done * 100.0 / It.Total)) + '%  ·  ' +
+          SizeText(It.Done) + ' из ' + SizeText(It.Total)
+      else
+        Result := 'Скачивается  ·  ' + SizeText(It.Done);
+    dsError: Result := 'Ошибка: ' + It.Error;
+  else
+    Result := '';
+  end;
+end;
+
+function PrettyFileTitle(const FileName: string): string;
+begin
+  Result := ChangeFileExt(ExtractFileName(FileName), '');
+  Result := StringReplace(Result, '_', ' ', [rfReplaceAll]);
+end;
+
+procedure TMainForm.ApplyLocalFilter;
+var
+  Files: TStringList;
+  i: Integer;
+  Ch: TChannel;
+  It: TDownloadItem;
+  Q, T, P: string;
+  SR: TSearchRec;
+  Total: Integer;
+
+  function NewItem(const AName, AUrl, AGroup, ALogo: string): TChannel;
+  begin
+    Result := TChannel.Create;
+    FLocalAll.Add(Result);
+    Result.Name := AName;
+    Result.NameLower := UTF8LowerCase(AName);
+    Result.URL := AUrl;
+    Result.Group := AGroup;
+    Result.Logo := ALogo;
+    Result.IsVod := True;
+  end;
+
+begin
+  Q := UTF8LowerCase(Trim(edSearch.Text));
+  Total := 0;
+  if (FSection = SEC_DOWNLOADS) and (segTabs.ItemIndex = 1) then
+  begin
+    { идущие загрузки }
+    for i := 0 to FDownloads.Count - 1 do
+    begin
+      It := FDownloads.Get(i);
+      if It.State in [dsDone, dsCancelled] then Continue;
+      Inc(Total);
+      Ch := NewItem(It.Title, '', DownloadText(It), It.Poster);
+      Ch.Data := It;
+      if (Q <> '') and (Pos(Q, Ch.NameLower) = 0) then Continue;
+      Ch.Number := FView.Count + 1;
+      FView.Add(Ch);
+    end;
+    chView.EmptyText := 'Сейчас ничего не скачивается. Чтобы скачать фильм, откройте его ' +
+      'страницу в разделе «Фильмы» и нажмите «Скачать».';
+  end
+  else
+  begin
+    Files := TStringList.Create;
+    try
+      ListVideoFiles(LocalDir, Files);
+      for i := 0 to Files.Count - 1 do
+      begin
+        T := '';
+        P := '';
+        if FSection = SEC_DOWNLOADS then LoadMediaInfo(FDownloads.IndexFile, Files[i], T, P);
+        if T = '' then T := PrettyFileTitle(Files[i]);
+        Inc(Total);
+        if (Q <> '') and (Pos(Q, UTF8LowerCase(T)) = 0) then Continue;
+        Ch := NewItem(T, Files[i], '', P);
+        if (FRecPlayer <> nil) and (Files[i] = FRecFile) then
+          Ch.Group := 'Идёт запись...'
+        else if FindFirst(Files[i], faAnyFile, SR) = 0 then
+        begin
+          Ch.Group := FormatDateTime('dd.mm.yyyy hh:nn', FileDateToDateTime(SR.Time)) + '  ·  ' +
+            SizeText(SR.Size);
+          FindClose(SR);
+        end;
+        Ch.Number := FView.Count + 1;
+        FView.Add(Ch);
+      end;
+    finally
+      Files.Free;
+    end;
+    if FSection = SEC_RECORDS then
+      chView.EmptyText := 'Записей пока нет. Чтобы записать эфир, нажмите красную кнопку под ' +
+        'видео (Ctrl+R). Папка записей: ' + FSettings.RecordDir
+    else
+      chView.EmptyText := 'Скачанных фильмов пока нет. Откройте страницу фильма в разделе «Фильмы» ' +
+        'и нажмите «Скачать».';
+  end;
+  chView.SetChannels(FView);
+  if FCurrent <> nil then chView.Current := FCurrent;
+  if FView.Count = Total then
+    lblCount.Caption := Format('Файлов: %d', [Total])
+  else
+    lblCount.Caption := Format('%d из %d', [FView.Count, Total]);
+end;
+
+procedure TMainForm.UpdateDownloadTexts;
+var
+  i: Integer;
+  Ch: TChannel;
+begin
+  for i := 0 to FView.Count - 1 do
+  begin
+    Ch := TChannel(FView[i]);
+    if Ch.Data is TDownloadItem then Ch.Group := DownloadText(TDownloadItem(Ch.Data));
+  end;
+  chView.Invalidate;
+end;
+
+procedure TMainForm.DownloadMovie(M: TMovie; SourceIndex: Integer);
+var
+  Src: TChannel;
+  U: string;
+  It: TDownloadItem;
+begin
+  if (M = nil) or (M.Sources.Count = 0) then Exit;
+  if (SourceIndex < 0) or (SourceIndex >= M.Sources.Count) then SourceIndex := 0;
+  Src := TChannel(M.Sources[SourceIndex]);
+  U := LowerCase(Src.URL);
+  if not IsRemoteUrl(Src.URL) then
+  begin
+    DarkMessage('Этот фильм уже лежит на компьютере — скачивать его не нужно.');
+    Exit;
+  end;
+  It := FDownloads.FindByUrl(Src.URL);
+  if (It <> nil) and (It.State in [dsQueued, dsRunning]) then
+  begin
+    SetSection(SEC_DOWNLOADS);
+    Exit;
+  end;
+  ForceDirectories(FSettings.DownloadDir);
+  It := FDownloads.Add(M.Title, Src.URL, M.Poster, FSettings.DownloadDir);
+  FDownloads.Poll;
+  SetInfo('Фильм «' + M.Title + '» скачивается — смотрите раздел «Скачанные»');
+  if (pgMovie <> nil) and FMoviePageOpen and (pgMovie.Movie = M) then
+    pgMovie.SetDownloadCaption('Скачивается...');
+  if FSection = SEC_DOWNLOADS then ApplyFilter;
+end;
+
+procedure TMainForm.MoviePageDownload(Sender: TObject);
+begin
+  if pgMovie <> nil then DownloadMovie(pgMovie.Movie, pgMovie.Source);
+end;
+
+procedure TMainForm.MovieMenuDownload(Sender: TObject);
+begin
+  DownloadMovie(FMenuMovie, 0);
+end;
+
+procedure TMainForm.LocalMenuPopup(Sender: TObject);
+var
+  Ch: TChannel;
+  It: TDownloadItem;
+begin
+  Ch := chView.SelectedChannel;
+  It := nil;
+  if (Ch <> nil) and (Ch.Data is TDownloadItem) then It := TDownloadItem(Ch.Data);
+  miLPlay.Visible := (Ch <> nil) and (It = nil);
+  miLFolder.Visible := True;
+  miLDelete.Visible := (Ch <> nil) and (It = nil);
+  miLCancel.Visible := (It <> nil) and (It.State in [dsQueued, dsRunning]);
+  miLRetry.Visible := (It <> nil) and (It.State = dsError);
+  StyleMenu(TPopupMenu(Sender));
+end;
+
+procedure TMainForm.LocalPlayClick(Sender: TObject);
+begin
+  PlayChannel(chView.SelectedChannel, True);
+end;
+
+procedure TMainForm.LocalFolderClick(Sender: TObject);
+begin
+  ForceDirectories(LocalDir);
+  OpenDocument(LocalDir);
+end;
+
+procedure TMainForm.LocalCancelClick(Sender: TObject);
+var
+  Ch: TChannel;
+begin
+  Ch := chView.SelectedChannel;
+  if (Ch = nil) or not (Ch.Data is TDownloadItem) then Exit;
+  if not DarkConfirm('Отменить скачивание «' + Ch.Name + '»?', 'Отменить загрузку', 'Нет') then Exit;
+  FDownloads.Cancel(TDownloadItem(Ch.Data));
+  ApplyFilter;
+end;
+
+procedure TMainForm.LocalRetryClick(Sender: TObject);
+var
+  Ch: TChannel;
+  It: TDownloadItem;
+begin
+  Ch := chView.SelectedChannel;
+  if (Ch = nil) or not (Ch.Data is TDownloadItem) then Exit;
+  It := TDownloadItem(Ch.Data);
+  It.State := dsCancelled;
+  FDownloads.Add(It.Title, It.Url, It.Poster, FSettings.DownloadDir);
+  FDownloads.Poll;
+  ApplyFilter;
+end;
+
+procedure TMainForm.DeleteLocal(Ch: TChannel);
+var
+  Fn: string;
+begin
+  if Ch = nil then Exit;
+  if Ch.Data is TDownloadItem then
+  begin
+    LocalCancelClick(nil);
+    Exit;
+  end;
+  Fn := Ch.URL;
+  if Fn = '' then Exit;
+  if (FRecPlayer <> nil) and (Fn = FRecFile) then
+  begin
+    DarkMessage('Сейчас идёт эта запись. Сначала остановите запись.');
+    Exit;
+  end;
+  if not DarkConfirm('Удалить файл «' + Ch.Name + '» с компьютера?' + LineEnding + LineEnding +
+    ExtractFileName(Fn), 'Удалить', 'Отмена') then Exit;
+  if FPlaying and (FCurrentUrl = Fn) then StopPlayback;
+  if not DeleteFile(Fn) then
+  begin
+    Sleep(500);   { плеер мог ещё не отпустить файл }
+    if not DeleteFile(Fn) then
+    begin
+      DarkMessage('Не удалось удалить файл. Возможно, он открыт в другой программе.', True);
+      Exit;
+    end;
+  end;
+  ForgetMediaInfo(FDownloads.IndexFile, Fn);
+  ApplyFilter;
+end;
+
+procedure TMainForm.FormCloseQuery(Sender: TObject; var CanClose: Boolean);
+var
+  N: Integer;
+begin
+  CanClose := True;
+  if FDownloads = nil then Exit;
+  N := FDownloads.ActiveCount;
+  if N > 0 then
+    CanClose := DarkConfirm('Сейчас скачивается фильмов: ' + IntToStr(N) + '.' + LineEnding +
+      LineEnding + 'Если закрыть программу, незавершённые загрузки будут отменены.',
+      'Закрыть программу', 'Не закрывать');
 end;
 
 end.

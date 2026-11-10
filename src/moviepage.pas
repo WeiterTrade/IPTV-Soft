@@ -8,7 +8,7 @@ interface
 
 uses
   Classes, SysUtils, Types, Controls, Graphics, StdCtrls, ExtCtrls, Menus, Math, Forms,
-  movies, m3u, widgets, logos;
+  movies, m3u, widgets, logos, darkmenu;
 
 type
   TPlayEvent = procedure(Sender: TObject; M: TMovie; SourceIndex: Integer) of object;
@@ -19,8 +19,8 @@ type
     FLogos: TLogoCache;
     FSource: Integer;
     FOnPlay: TPlayEvent;
-    FOnBack, FOnFav: TNotifyEvent;
-    btnBack, btnPlay, btnSource, btnFav: TFlatButton;
+    FOnBack, FOnFav, FOnDownload: TNotifyEvent;
+    btnBack, btnPlay, btnSource, btnFav, btnDownload: TFlatButton;
     lblTitle, lblMeta, lblDirector, lblCast, lblDesc, lblGroups: TLabel;
     pbPoster: TPaintBox;
     pmSources: TPopupMenu;
@@ -29,6 +29,7 @@ type
     procedure BackClick(Sender: TObject);
     procedure PlayClick(Sender: TObject);
     procedure FavClick(Sender: TObject);
+    procedure DownloadClick(Sender: TObject);
     procedure SourceClick(Sender: TObject);
     procedure SourceItemClick(Sender: TObject);
     function MakeLabel(Size: Integer; Bold, Dim: Boolean): TLabel;
@@ -41,10 +42,13 @@ type
     procedure UpdateInfo;
     procedure SetFavorite(V: Boolean);
     procedure RefreshPoster;
+    procedure SetDownloadCaption(const S: string);
+    property Source: Integer read FSource;
     property Movie: TMovie read FMovie;
     property OnPlay: TPlayEvent read FOnPlay write FOnPlay;
     property OnBack: TNotifyEvent read FOnBack write FOnBack;
     property OnFav: TNotifyEvent read FOnFav write FOnFav;
+    property OnDownload: TNotifyEvent read FOnDownload write FOnDownload;
   end;
 
 implementation
@@ -112,6 +116,14 @@ begin
   btnFav.Caption := 'В избранное';
   btnFav.OnClick := @FavClick;
 
+  btnDownload := TFlatButton.Create(Self);
+  btnDownload.Parent := FBox;
+  btnDownload.Bordered := True;
+  btnDownload.Kind := ikDownload;
+  btnDownload.Caption := 'Скачать';
+  btnDownload.Hint := 'Скачать фильм на компьютер, чтобы смотреть без интернета';
+  btnDownload.OnClick := @DownloadClick;
+
   pmSources := TPopupMenu.Create(Self);
   LayoutControls;
 end;
@@ -166,6 +178,7 @@ begin
     btnSource.SetBounds(Sc(36), btnPlay.Top + BH + Sc(10), PW, LH + Sc(18));
     btnFav.SetBounds(Sc(36), btnSource.Top + btnSource.Height + Sc(8), PW, LH + Sc(18));
   end;
+  btnDownload.SetBounds(Sc(36), btnFav.Top + btnFav.Height + Sc(8), PW, LH + Sc(18));
   X := Sc(36) + PW + Sc(36);
   W := FBox.ClientWidth - X - Sc(36);
   if W < 200 then W := 200;
@@ -177,6 +190,17 @@ begin
   Place(lblCast, Sc(16));
   Place(lblDesc, Sc(24));
   FBox.VertScrollBar.Position := SPos;
+end;
+
+procedure TMoviePage.SetDownloadCaption(const S: string);
+begin
+  btnDownload.Caption := S;
+  btnDownload.Invalidate;
+end;
+
+procedure TMoviePage.DownloadClick(Sender: TObject);
+begin
+  if Assigned(FOnDownload) then FOnDownload(Self);
 end;
 
 procedure TMoviePage.RefreshPoster;
@@ -329,6 +353,7 @@ begin
     Mi.OnClick := @SourceItemClick;
     pmSources.Items.Add(Mi);
   end;
+  StyleMenu(pmSources);
   P := btnSource.ClientToScreen(Point(0, btnSource.Height));
   pmSources.PopUp(P.X, P.Y);
 end;

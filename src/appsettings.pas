@@ -62,6 +62,7 @@ type
     NetworkCaching: Integer;
     { запись }
     RecordDir: string;
+    DownloadDir: string;         { папка для скачанных фильмов }
     { телепрограмма }
     UsePlaylistEpg: Boolean;
     EpgPastDays: Integer;        { сколько дней прошедшей программы хранить (архив) }
@@ -106,6 +107,7 @@ type
 
 function HashStr(const S: string): string;
 function DefaultRecordDir: string;
+function DefaultDownloadDir: string;
 
 implementation
 
@@ -168,6 +170,15 @@ begin
     Result := Home + 'IPTV Aristocrat Records';
 end;
 
+function DefaultDownloadDir: string;
+begin
+  Result := IncludeTrailingPathDelimiter(ExtractFileDir(ExcludeTrailingPathDelimiter(DefaultRecordDir)));
+  if Pos('IPTV Aristocrat Records', DefaultRecordDir) > 0 then
+    Result := Result + 'IPTV Aristocrat Downloads'
+  else
+    Result := Result + 'IPTV Aristocrat Загрузки';
+end;
+
 constructor TAppSettings.Create;
 begin
   inherited Create;
@@ -201,6 +212,7 @@ begin
   AutoPlayLast := True;
   NetworkCaching := 1000;
   RecordDir := DefaultRecordDir;
+  DownloadDir := DefaultDownloadDir;
   UsePlaylistEpg := True;
   EpgPastDays := 7;
   DefaultCatchup := 0;
@@ -275,6 +287,7 @@ begin
   NetworkCaching := Ini.ReadInteger('Player', 'NetworkCaching', NetworkCaching);
 
   RecordDir := Ini.ReadString('Record', 'Folder', RecordDir);
+  DownloadDir := Ini.ReadString('Record', 'DownloadFolder', DownloadDir);
   UsePlaylistEpg := Ini.ReadBool('Epg', 'UsePlaylistEpg', UsePlaylistEpg);
   EpgPastDays := Ini.ReadInteger('Epg', 'PastDays', EpgPastDays);
   DefaultCatchup := Ini.ReadInteger('Epg', 'DefaultCatchup', DefaultCatchup);
@@ -318,6 +331,7 @@ begin
   if NetworkCaching < 100 then NetworkCaching := 100;
   if NetworkCaching > 60000 then NetworkCaching := 60000;
   if RecordDir = '' then RecordDir := DefaultRecordDir;
+  if DownloadDir = '' then DownloadDir := DefaultDownloadDir;
   if EpgPastDays < 0 then EpgPastDays := 0;
   if EpgPastDays > 14 then EpgPastDays := 14;
   if (DefaultCatchup < 0) or (DefaultCatchup > 4) then DefaultCatchup := 0;
@@ -353,6 +367,7 @@ begin
   Ini.WriteInteger('Player', 'NetworkCaching', NetworkCaching);
 
   Ini.WriteString('Record', 'Folder', RecordDir);
+  Ini.WriteString('Record', 'DownloadFolder', DownloadDir);
   Ini.WriteBool('Epg', 'UsePlaylistEpg', UsePlaylistEpg);
   Ini.WriteInteger('Epg', 'PastDays', EpgPastDays);
   Ini.WriteInteger('Epg', 'DefaultCatchup', DefaultCatchup);

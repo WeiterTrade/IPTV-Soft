@@ -24,6 +24,7 @@ type
     IsVod: Boolean;    { фильм / сериал, а не телеканал }
     Hidden: Boolean;   { удалён пользователем из списка }
     Locked: Boolean;   { защищён паролем (родительский контроль) }
+    Data: TObject;     { для локальных файлов: связанная загрузка (TDownloadItem) }
     Options: string;   { параметры VLC (#EXTVLCOPT), по одному на строку }
     CatchupType: string;    { архив: shift, append, default, flussonic, xc }
     CatchupSource: string;  { шаблон ссылки на архив }

@@ -42,7 +42,7 @@ type
     ikFullscreen, ikStar, ikPlus, ikMinus, ikRefresh, ikEdit, ikRecord,
     ikBack, ikChevron, ikViewList, ikViewCompact, ikViewGrid, ikViewTiles,
     ikWinMin, ikWinMax, ikWinRestore, ikClose, ikSettings, ikExternal, ikUp, ikDown, ikWall, ikPause,
-    ikTv, ikFilm, ikHistory, ikLock, ikTrash);
+    ikTv, ikFilm, ikHistory, ikLock, ikTrash, ikDownload, ikFolder);
 
   TFlatButton = class(TGraphicControl)
   private
@@ -492,6 +492,22 @@ begin
         C.Brush.Style := bsSolid;
         C.Pen.Width := 1;
         C.RoundRect(cx - s, cy - 1, cx + s + 1, cy + s + 2, 3, 3);
+      end;
+    ikDownload:
+      begin
+        { стрелка вниз в лоток }
+        C.Pen.Width := 2;
+        C.Line(cx, cy - s - 1, cx, cy + s div 2);
+        C.Polyline([Point(cx - s div 2 - 1, cy), Point(cx, cy + s div 2 + 1), Point(cx + s div 2 + 1, cy)]);
+        C.Polyline([Point(cx - s - 1, cy + s div 2), Point(cx - s - 1, cy + s + 1), Point(cx + s + 1, cy + s + 1),
+          Point(cx + s + 1, cy + s div 2)]);
+      end;
+    ikFolder:
+      begin
+        C.Pen.Width := 2;
+        C.Brush.Style := bsClear;
+        C.Polygon([Point(cx - s - 1, cy - s + 2), Point(cx - 2, cy - s + 2), Point(cx + 1, cy - s + 5),
+          Point(cx + s + 1, cy - s + 5), Point(cx + s + 1, cy + s), Point(cx - s - 1, cy + s)]);
       end;
     ikTrash:
       begin

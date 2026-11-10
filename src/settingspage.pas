@@ -37,7 +37,7 @@ type
     edExtPath, edExtArgs: TEdit;
     seCaching: TSpinEdit;
     { запись }
-    edRecDir: TEdit;
+    edRecDir, edDlDir: TEdit;
     { телепрограмма }
     tgPlaylistEpg: TToggle;
     lbSources: TListBox;
@@ -61,6 +61,8 @@ type
     procedure DoneClick(Sender: TObject);
     procedure BrowsePlayer(Sender: TObject);
     procedure BrowseRecDir(Sender: TObject);
+    procedure BrowseDlDir(Sender: TObject);
+    procedure OpenDlDir(Sender: TObject);
     procedure OpenRecDir(Sender: TObject);
     procedure AddSource(Sender: TObject);
     procedure RemoveSource(Sender: TObject);
@@ -352,6 +354,14 @@ begin
   AddLabel(P, 'Запись включается красной кнопкой под видео или клавишами Ctrl+R. Записывается канал, ' +
     'который вы смотрите в момент нажатия; можно переключиться на другой — запись продолжится. ' +
     'Файлы сохраняются в формате .ts и открываются любым плеером.', X0, Y, COL_W, True).Height := 70;
+  Inc(Y, 90);
+  AddLabel(P, 'Папка для скачанных фильмов', X0, Y, 0, False, True);
+  edDlDir := AddEdit(P, X0, Y + 30, COL_W - 260);
+  AddButton(P, 'Выбрать...', X0 + COL_W - 250, Y + 27, 120, @BrowseDlDir);
+  AddButton(P, 'Открыть', X0 + COL_W - 120, Y + 27, 120, @OpenDlDir);
+  Inc(Y, 80);
+  AddLabel(P, 'Фильм скачивается кнопкой «Скачать» на странице фильма. Скачанные фильмы и записи эфира ' +
+    'видны в разделах «Скачанные» и «Записи» на панели слева.', X0, Y, COL_W, True).Height := 50;
 
   { ---------- Телепрограмма ---------- }
   P := NewPage(SEC_EPG, 'Телепрограмма и архив', ikViewList);
@@ -450,6 +460,7 @@ begin
   edExtArgs.Text := FS.ExternalArgs;
   seCaching.Value := FS.NetworkCaching;
   edRecDir.Text := FS.RecordDir;
+  edDlDir.Text := FS.DownloadDir;
   tgPlaylistEpg.Checked := FS.UsePlaylistEpg;
   lbSources.Items.Assign(FS.EpgSources);
   sePastDays.Value := FS.EpgPastDays;
@@ -474,6 +485,8 @@ begin
   FS.NetworkCaching := seCaching.Value;
   FS.RecordDir := Trim(edRecDir.Text);
   if FS.RecordDir = '' then FS.RecordDir := DefaultRecordDir;
+  FS.DownloadDir := Trim(edDlDir.Text);
+  if FS.DownloadDir = '' then FS.DownloadDir := DefaultDownloadDir;
   FS.UsePlaylistEpg := tgPlaylistEpg.Checked;
   FS.EpgSources.Assign(lbSources.Items);
   FS.EpgPastDays := sePastDays.Value;
@@ -523,6 +536,30 @@ begin
   finally
     D.Free;
   end;
+end;
+
+procedure TSettingsPage.BrowseDlDir(Sender: TObject);
+var
+  D: TSelectDirectoryDialog;
+begin
+  D := TSelectDirectoryDialog.Create(Self);
+  try
+    D.Title := 'Папка для скачанных фильмов';
+    if DirectoryExists(edDlDir.Text) then D.InitialDir := edDlDir.Text;
+    if D.Execute then edDlDir.Text := D.FileName;
+  finally
+    D.Free;
+  end;
+end;
+
+procedure TSettingsPage.OpenDlDir(Sender: TObject);
+var
+  Dir: string;
+begin
+  Dir := Trim(edDlDir.Text);
+  if Dir = '' then Exit;
+  ForceDirectories(Dir);
+  OpenDocument(Dir);
 end;
 
 procedure TSettingsPage.OpenRecDir(Sender: TObject);
