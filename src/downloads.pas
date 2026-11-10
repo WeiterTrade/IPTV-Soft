@@ -131,15 +131,15 @@ begin
   if not DirectoryExists(D) then Exit;
   T := TStringList.Create;
   try
-    if FindFirst(D + '*', faAnyFile, SR) = 0 then
+    if SysUtils.FindFirst(D + '*', faAnyFile, SR) = 0 then
     try
       repeat
         if (SR.Attr and faDirectory) <> 0 then Continue;
         if IsVideoFile(SR.Name) then
           T.AddObject(D + SR.Name, TObject(PtrInt(SR.Time)));
-      until FindNext(SR) <> 0;
+      until SysUtils.FindNext(SR) <> 0;
     finally
-      FindClose(SR);
+      SysUtils.FindClose(SR);
     end;
     T.CustomSort(@CompareByAge);
     L.Assign(T);
@@ -319,10 +319,10 @@ var
   SR: TSearchRec;
 begin
   Result := 0;
-  if FindFirst(FileName, faAnyFile, SR) = 0 then
+  if SysUtils.FindFirst(FileName, faAnyFile, SR) = 0 then
   begin
     Result := SR.Size;
-    FindClose(SR);
+    SysUtils.FindClose(SR);
   end;
 end;
 
@@ -470,7 +470,7 @@ begin
   finally
     L.Free;
   end;
-  DeleteFile(Tmp);
+  SysUtils.DeleteFile(Tmp);
 end;
 
 function FileStartsWithM3U(const FileName: string): Boolean;
@@ -616,7 +616,7 @@ begin
         finally
           S.Free;
         end;
-        DeleteFile(Tmp);
+        SysUtils.DeleteFile(Tmp);
         Item.PartsDone := i + 1;
       end;
     finally
@@ -625,7 +625,7 @@ begin
     Ok := Item.Done > 0;
     if not Ok then ErrMsg := 'сервер не отдал фильм';
   finally
-    DeleteFile(Tmp);
+    SysUtils.DeleteFile(Tmp);
     Segs.Free;
     Pl.Free;
   end;
@@ -649,7 +649,7 @@ begin
     Ok := False;
     if FetchText(Item.Url, Item.FileName + '.seg', Txt, Err) then
     begin
-      DeleteFile(Part);
+      SysUtils.DeleteFile(Part);
       Item.Total := 0;
       DownloadHls(Item.Url, Txt);
     end
@@ -742,17 +742,17 @@ begin
       if It.Cancelled and not T.Ok then
       begin
         It.State := dsCancelled;
-        DeleteFile(It.FileName + '.part');
+        SysUtils.DeleteFile(It.FileName + '.part');
         ForgetMediaInfo(FIndexFile, It.FileName);
       end
-      else if T.Ok and RenameFile(It.FileName + '.part', It.FileName) then
+      else if T.Ok and SysUtils.RenameFile(It.FileName + '.part', It.FileName) then
         It.State := dsDone
       else
       begin
         It.State := dsError;
         It.Error := T.ErrMsg;
         if It.Error = '' then It.Error := 'не удалось сохранить файл';
-        DeleteFile(It.FileName + '.part');
+        SysUtils.DeleteFile(It.FileName + '.part');
       end;
       It.Thread := nil;
       T.Free;
@@ -845,7 +845,7 @@ begin
     begin
       It.Thread.Free;
       It.Thread := nil;
-      DeleteFile(It.FileName + '.part');
+      SysUtils.DeleteFile(It.FileName + '.part');
       ForgetMediaInfo(FIndexFile, It.FileName);
     end;
   end;
