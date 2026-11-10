@@ -1,6 +1,7 @@
 [Desktop Entry]
 Type=Application
-Name=IPTV Aristocrat
+Name=IPTV
+X-GNOME-FullName=IPTV Aristocrat
 GenericName=IPTV Player
 GenericName[ru]=IPTV-плеер
 Comment=Watch IPTV channels from M3U playlists
