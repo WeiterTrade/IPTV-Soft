@@ -45,7 +45,7 @@ type
     function IndexAt(X, Y: Integer): Integer;
     function ThumbRect: TRect;
     procedure ClampScroll;
-    procedure DrawLogo(C: TCanvas; Ch: TChannel; const R: TRect);
+    procedure DrawLogo(C: TCanvas; Ch: TChannel; const R: TRect; Bg: TColor);
     procedure DrawChannel(C: TCanvas; Index: Integer; const R: TRect);
     procedure DrawCategory(C: TCanvas; Index: Integer; const R: TRect);
     function ItemBg(Index: Integer; Card: Boolean): TColor;
@@ -369,7 +369,7 @@ begin
   else Result := clrSide;
 end;
 
-procedure TChannelView.DrawLogo(C: TCanvas; Ch: TChannel; const R: TRect);
+procedure TChannelView.DrawLogo(C: TCanvas; Ch: TChannel; const R: TRect; Bg: TColor);
 var
   B: TBitmap;
   Sz, TW, TH: Integer;
@@ -378,7 +378,7 @@ begin
   Sz := R.Right - R.Left;
   B := nil;
   if (FLogos <> nil) and (Ch.Logo <> '') then
-    B := FLogos.Get(Ch.Logo, Sz);
+    B := FLogos.Get(Ch.Logo, Sz, Bg);
   if B <> nil then
   begin
     C.Draw(R.Left, R.Top, B);
@@ -445,7 +445,7 @@ begin
         if FShowLogos then
         begin
           if FMode = vmList then LS := 38 else LS := 20;
-          DrawLogo(C, Ch, Rect(X, (R.Top + R.Bottom - LS) div 2, X + LS, (R.Top + R.Bottom - LS) div 2 + LS));
+          DrawLogo(C, Ch, Rect(X, (R.Top + R.Bottom - LS) div 2, X + LS, (R.Top + R.Bottom - LS) div 2 + LS), ItemBg(Index, False));
           C.Brush.Style := bsClear;
           Inc(X, LS + 10);
         end;
@@ -498,7 +498,7 @@ begin
         X := (Card.Left + Card.Right - LS) div 2;
         Y := Card.Top + 12;
         if FShowLogos then
-          DrawLogo(C, Ch, Rect(X, Y, X + LS, Y + LS))
+          DrawLogo(C, Ch, Rect(X, Y, X + LS, Y + LS), ItemBg(Index, True))
         else
         begin
           C.Font.Size := 18;
@@ -547,7 +547,7 @@ begin
         if FShowLogos then
         begin
           LS := Card.Bottom - Card.Top - 20;
-          DrawLogo(C, Ch, Rect(X, Card.Top + 10, X + LS, Card.Top + 10 + LS));
+          DrawLogo(C, Ch, Rect(X, Card.Top + 10, X + LS, Card.Top + 10 + LS), ItemBg(Index, True));
           Inc(X, LS + 12);
         end;
         C.Brush.Style := bsClear;

@@ -2117,7 +2117,7 @@ begin
   if FSettings.ShowLogos and (FCurrent.Logo <> '') then
   begin
     LS := pbInfo.Height - 20;
-    B := FLogos.Get(FCurrent.Logo, LS);
+    B := FLogos.Get(FCurrent.Logo, LS, clrBg);
     if B <> nil then
     begin
       C.Draw(X, 10, B);

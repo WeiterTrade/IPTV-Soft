@@ -9,9 +9,6 @@ interface
 uses
   Classes, SysUtils, Graphics, syncobjs;
 
-const
-  LOGO_PLATE = TColor($00F1EEEC);   { светлая подложка под логотип }
-
 type
   TLogoCache = class;
 
@@ -48,8 +45,9 @@ type
   public
     constructor Create(const ACacheDir: string);
     destructor Destroy; override;
-    { Готовая картинка размера Size x Size или nil (тогда будет загружена позже). }
-    function Get(const Url: string; Size: Integer): TBitmap;
+    { Готовая картинка Size x Size, нарисованная на фоне Bg с учётом прозрачности,
+      или nil (тогда будет загружена позже). }
+    function Get(const Url: string; Size: Integer; Bg: TColor): TBitmap;
     procedure Delivered(List: TStrings);
     procedure ClearMemory;
     property OnLoaded: TNotifyEvent read FOnLoaded write FOnLoaded;
@@ -58,7 +56,7 @@ type
 implementation
 
 uses
-  netload, appsettings;
+  IntfGraphics, FPImage, GraphType, netload, appsettings;
 
 function DetectExt(const FileName: string): string;
 var
@@ -276,9 +274,93 @@ begin
   if Assigned(FOnLoaded) then FOnLoaded(Self);
 end;
 
-function LoadScaled(const Path: string; Size: Integer): TBitmap;
+{ Сглаженное уменьшение с учётом прозрачности: каждый пиксель результата —
+  среднее по области исходника, смешанное с цветом фона. Подложки нет. }
+function RenderLogo(Src: TLazIntfImage; Size: Integer; Bg: TColor): TBitmap;
+var
+  Dst: TLazIntfImage;
+  W, H, TW, TH, OX, OY, Pad, dx, dy, sx, sy, sx0, sx1, sy0, sy1, n: Integer;
+  C: TFPColor;
+  SR, SG, SB, SA, A, BR, BGr, BB: Double;
+  BC: TColor;
+
+  function Clamp16(V: Double): Word;
+  begin
+    if V < 0 then V := 0;
+    if V > 65535 then V := 65535;
+    Result := Round(V);
+  end;
+
+begin
+  W := Src.Width;
+  H := Src.Height;
+  Pad := Size div 16;
+  TW := Size - 2 * Pad;
+  TH := Round(H * TW / W);
+  if TH > Size - 2 * Pad then
+  begin
+    TH := Size - 2 * Pad;
+    TW := Round(W * TH / H);
+  end;
+  if TW < 1 then TW := 1;
+  if TH < 1 then TH := 1;
+  OX := (Size - TW) div 2;
+  OY := (Size - TH) div 2;
+  BC := ColorToRGB(Bg);
+  BR := Red(BC) * 257.0;
+  BGr := Green(BC) * 257.0;
+  BB := Blue(BC) * 257.0;
+
+  Result := TBitmap.Create;
+  Result.PixelFormat := pf24bit;
+  Result.SetSize(Size, Size);
+  Result.Canvas.Brush.Color := Bg;
+  Result.Canvas.FillRect(0, 0, Size, Size);
+  Dst := Result.CreateIntfImage;
+  try
+    for dy := 0 to TH - 1 do
+    begin
+      sy0 := dy * H div TH;
+      sy1 := (dy + 1) * H div TH;
+      if sy1 <= sy0 then sy1 := sy0 + 1;
+      if sy1 > H then sy1 := H;
+      for dx := 0 to TW - 1 do
+      begin
+        sx0 := dx * W div TW;
+        sx1 := (dx + 1) * W div TW;
+        if sx1 <= sx0 then sx1 := sx0 + 1;
+        if sx1 > W then sx1 := W;
+        SR := 0; SG := 0; SB := 0; SA := 0; n := 0;
+        for sy := sy0 to sy1 - 1 do
+          for sx := sx0 to sx1 - 1 do
+          begin
+            C := Src.Colors[sx, sy];
+            A := C.alpha / 65535;
+            SR := SR + C.red * A;
+            SG := SG + C.green * A;
+            SB := SB + C.blue * A;
+            SA := SA + A;
+            Inc(n);
+          end;
+        if n = 0 then Continue;
+        A := SA / n;
+        C.red := Clamp16(SR / n + BR * (1 - A));
+        C.green := Clamp16(SG / n + BGr * (1 - A));
+        C.blue := Clamp16(SB / n + BB * (1 - A));
+        C.alpha := alphaOpaque;
+        Dst.Colors[OX + dx, OY + dy] := C;
+      end;
+    end;
+    Result.LoadFromIntfImage(Dst);
+  finally
+    Dst.Free;
+  end;
+end;
+
+function LoadScaled(const Path: string; Size: Integer; Bg: TColor): TBitmap;
 var
   P: TPicture;
+  Src: TLazIntfImage;
   W, H, TW, TH, Pad: Integer;
   R: TRect;
 begin
@@ -293,7 +375,23 @@ begin
     W := P.Width;
     H := P.Height;
     if (W <= 0) or (H <= 0) then Exit;
-    Pad := Size div 10;
+
+    { основной путь: свой рендер с прозрачностью }
+    if P.Graphic is TRasterImage then
+    try
+      Src := TRasterImage(P.Graphic).CreateIntfImage;
+      try
+        Result := RenderLogo(Src, Size, Bg);
+      finally
+        Src.Free;
+      end;
+      Exit;
+    except
+      FreeAndNil(Result);
+    end;
+
+    { запасной путь }
+    Pad := Size div 16;
     TW := Size - 2 * Pad;
     TH := Round(H * TW / W);
     if TH > Size - 2 * Pad then
@@ -305,7 +403,7 @@ begin
     if TH < 1 then TH := 1;
     Result := TBitmap.Create;
     Result.SetSize(Size, Size);
-    Result.Canvas.Brush.Color := LOGO_PLATE;
+    Result.Canvas.Brush.Color := Bg;
     Result.Canvas.FillRect(0, 0, Size, Size);
     R := Rect((Size - TW) div 2, (Size - TH) div 2, (Size - TW) div 2 + TW, (Size - TH) div 2 + TH);
     try
@@ -318,7 +416,7 @@ begin
   end;
 end;
 
-function TLogoCache.Get(const Url: string; Size: Integer): TBitmap;
+function TLogoCache.Get(const Url: string; Size: Integer; Bg: TColor): TBitmap;
 var
   Key, Path: string;
   i: Integer;
@@ -326,7 +424,7 @@ var
 begin
   Result := nil;
   if Url = '' then Exit;
-  Key := IntToStr(Size) + '#' + Url;
+  Key := IntToStr(Size) + '#' + IntToHex(ColorToRGB(Bg), 6) + '#' + Url;
   if FBitmaps.Find(Key, i) then
     Exit(TBitmap(FBitmaps.Objects[i]));
 
@@ -347,7 +445,7 @@ begin
   end;
 
   B := nil;
-  if Path <> '' then B := LoadScaled(Path, Size);
+  if Path <> '' then B := LoadScaled(Path, Size, Bg);
   FBitmaps.AddObject(Key, B);   { nil — запоминаем неудачу }
   Result := B;
 end;
