@@ -130,7 +130,7 @@ type
     splInfo: TSplitter;
     pbTitle, pbInfo, pbLogo: TPaintBox;
     btnMenuSettings: TFlatButton;
-    btnWinMin, btnWinMax, btnWinClose: TFlatButton;
+    btnWinMin, btnWinMax, btnWinClose, btnAbout: TFlatButton;
     splSide: TSplitter;
     segTabs: TSegmentBar;
     cbPlaylists: TComboBox;
@@ -146,7 +146,15 @@ type
     btnInfoUp, btnInfoDown, btnWall: TFlatButton;
     btnPrev, btnStop, btnNext, btnFav, btnRec, btnExt, btnMute, btnFull, btnSettings: TFlatButton;
     sldVolume: TFlatSlider;
-    tmrStatus, tmrSelect, tmrSearch: TTimer;
+    tmrStatus, tmrSelect, tmrSearch, tmrFsMouse: TTimer;
+    { полноэкранная панель управления и формат кадра }
+    btnAspect: TFlatButton;
+    pmAspect: TPopupMenu;
+    FAspect: Integer;
+    FFsBar: Boolean;
+    FFsHideAt: QWord;
+    FAspectMenuOpen: Boolean;
+    FBottomSaved: Integer;
     pmChannel: TPopupMenu;
     miPlay, miGuide, miExternal, miRecord, miFav, miCopy: TMenuItem;
 
@@ -227,6 +235,7 @@ type
     procedure GripMouseMove(Sender: TObject; Shift: TShiftState; X, Y: Integer);
     procedure GripMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
     procedure WinMinClick(Sender: TObject);
+    procedure AboutClick(Sender: TObject);
     procedure WinMaxClick(Sender: TObject);
     procedure WinCloseClick(Sender: TObject);
     procedure TabsChange(Sender: TObject);
@@ -276,6 +285,13 @@ type
     procedure ViewItemActivate(Sender: TObject; Index: Integer);
     procedure ViewSelectionMoved(Sender: TObject; Index: Integer);
     procedure VideoDblClick(Sender: TObject);
+    procedure FsMouseTimer(Sender: TObject);
+    procedure ShowFsBar(V: Boolean);
+    procedure ApplyAspect;
+    procedure SetAspect(Mode: Integer);
+    procedure AspectClick(Sender: TObject);
+    procedure AspectItemClick(Sender: TObject);
+    procedure VideoResize(Sender: TObject);
     procedure InfoPaint(Sender: TObject);
     procedure LiveClick(Sender: TObject);
     procedure FormResize(Sender: TObject);
@@ -313,6 +329,10 @@ implementation
 
 const
   APP_NAME = 'IPTV Aristocrat';
+  APP_VERSION = '1.6.0';
+  ASPECT_NAMES: array[0..4] of string =
+    ('Авто (как в источнике)', '16:9', '4:3', 'Растянуть на весь экран', 'Заполнить экран (с обрезкой)');
+  ASPECT_SHORT: array[0..4] of string = ('Авто', '16:9', '4:3', 'Растянуть', 'Заполнить');
   SEC_TV = 0;
   SEC_MOVIES = 1;
   SEC_HISTORY = 2;
@@ -830,6 +850,13 @@ begin
   btnWinMin.Width := 46;
   btnWinMin.BorderSpacing.Around := 0;
   btnWinMin.Left := 2800;
+  btnAbout := MakeButton(pnlTitle, ikNone, alRight, 'О программе', @AboutClick);
+  btnAbout.Caption := 'О программе';
+  btnAbout.NavStyle := True;
+  btnAbout.Width := MeasureText(btnAbout.Font, 'О программе').cx + 28;
+  btnAbout.BorderSpacing.Around := 0;
+  btnAbout.BorderSpacing.Right := 10;
+  btnAbout.Left := 2700;
 
   { слева: знак и название, затем пункты меню }
   pbLogo := TPaintBox.Create(Self);
@@ -889,6 +916,7 @@ end;
 procedure TMainForm.BuildUI;
 var
   NextTop, i: Integer;
+  miAsp: TMenuItem;
 
   procedure StackTop(C: TControl);
   begin
@@ -1177,6 +1205,7 @@ begin
   pnlVideo.Font.Color := clrDim;
   pnlVideo.Caption := 'Выберите канал в списке слева';
   pnlVideo.OnDblClick := @VideoDblClick;
+  pnlVideo.OnResize := @VideoResize;
   for i := 0 to VIDEO_SLOTS - 1 do
   begin
     FSlots[i] := MakePanel(pnlVideo, alClient, clBlack, 0);
@@ -1208,6 +1237,25 @@ begin
 
   btnSettings := MakeButton(pnlControls, ikSettings, alRight, 'Настройки', @SettingsClick);
   btnSettings.Left := 3100;
+  btnAspect := MakeButton(pnlControls, ikNone, alRight, 'Формат кадра: 16:9, 4:3, растянуть, заполнить (A)', @AspectClick);
+  btnAspect.Bordered := True;
+  btnAspect.Caption := 'Авто';
+  btnAspect.Width := MeasureText(btnAspect.Font, 'Заполнить').cx + 30;
+  btnAspect.BorderSpacing.Top := 8;
+  btnAspect.BorderSpacing.Bottom := 8;
+  btnAspect.BorderSpacing.Right := 6;
+  btnAspect.Left := 2950;
+  pmAspect := TPopupMenu.Create(Self);
+  for i := 0 to High(ASPECT_NAMES) do
+  begin
+    miAsp := TMenuItem.Create(pmAspect);
+    miAsp.Caption := ASPECT_NAMES[i];
+    miAsp.Tag := i;
+    miAsp.RadioItem := True;
+    miAsp.OnClick := @AspectItemClick;
+    pmAspect.Items.Add(miAsp);
+  end;
+  pmAspect.Items[0].Checked := True;
   btnFull := MakeButton(pnlControls, ikFullscreen, alRight, 'На весь экран без рамок (F11, двойной щелчок)', @FullClick);
   btnFull.Left := 3000;
   sldVolume := TFlatSlider.Create(Self);
@@ -1253,6 +1301,10 @@ begin
   tmrSearch.Enabled := False;
   tmrSearch.Interval := 250;
   tmrSearch.OnTimer := @SearchTimer;
+  tmrFsMouse := TTimer.Create(Self);
+  tmrFsMouse.Enabled := False;
+  tmrFsMouse.Interval := 150;
+  tmrFsMouse.OnTimer := @FsMouseTimer;
 end;
 
 procedure TMainForm.InitVlc;
@@ -1509,6 +1561,19 @@ begin
     BeginWindowResize(Self, EdgeAt(TPanel(Sender), gripTop, gripBottom, gripLeft, X));
 end;
 
+procedure TMainForm.AboutClick(Sender: TObject);
+var
+  Plat: string;
+begin
+  {$IFDEF WINDOWS}
+  Plat := 'Windows';
+  {$ELSE}
+  Plat := 'Linux';
+  {$ENDIF}
+  if VlcVersion <> '' then Plat := Plat + ', VLC ' + Copy(VlcVersion, 1, Pos(' ', VlcVersion + ' ') - 1);
+  DarkAbout(APP_NAME, APP_VERSION, Plat);
+end;
+
 procedure TMainForm.WinMinClick(Sender: TObject);
 begin
   { на Windows сворачиваем всё приложение — иначе окно без рамки
@@ -1575,6 +1640,9 @@ begin
     pnlRail.Visible := False;
     pnlBottom.Visible := False;
     splInfo.Visible := False;
+    FBottomSaved := pnlBottom.Height;
+    FFsBar := False;
+    tmrFsMouse.Enabled := True;
     UpdateFrameControls;
 {$IFDEF WINDOWS}
     if FSystemFrame then
@@ -1587,6 +1655,8 @@ begin
   end
   else
   begin
+    tmrFsMouse.Enabled := False;
+    if FFsBar then ShowFsBar(False);
 {$IFDEF WINDOWS}
     if FSystemFrame then
     begin
@@ -1610,6 +1680,137 @@ begin
     UpdateFrameControls;
     UpdateSideMax;
   end;
+  ApplyAspect;
+end;
+
+{ В полноэкранном режиме панель управления (пауза, перемотка, формат
+  кадра) появляется, когда мышь у нижнего края экрана. }
+procedure TMainForm.ShowFsBar(V: Boolean);
+var
+  H: Integer;
+begin
+  if V = FFsBar then Exit;
+  FFsBar := V;
+  DisableAlign;
+  try
+    if V then
+    begin
+      pnlInfo.Visible := False;
+      pnlBottom.Constraints.MinHeight := 0;
+      pnlBottom.Constraints.MaxHeight := 0;
+      H := pnlControls.Height;
+      if pnlSeek.Visible then Inc(H, pnlSeek.Height);
+      pnlBottom.Height := H;
+      pnlBottom.Visible := True;
+    end
+    else
+    begin
+      pnlBottom.Visible := False;
+      pnlInfo.Visible := True;
+      pnlBottom.Height := FBottomSaved;
+      pnlBottom.Constraints.MinHeight := 50 + 60;
+    end;
+  finally
+    EnableAlign;
+  end;
+end;
+
+procedure TMainForm.FsMouseTimer(Sender: TObject);
+var
+  P: TPoint;
+  R: TRect;
+  Near: Boolean;
+begin
+  if not FFullscreen then
+  begin
+    tmrFsMouse.Enabled := False;
+    Exit;
+  end;
+  P := Mouse.CursorPos;
+  R := BoundsRect;
+  Near := (P.X >= R.Left) and (P.X < R.Right) and (P.Y < R.Bottom) and
+    (P.Y >= R.Bottom - Math.Max(Sc(110), pnlControls.Height + pnlSeek.Height + Sc(20)));
+  if Near or sldSeek.Dragging or sldVolume.Dragging or FAspectMenuOpen then
+  begin
+    FFsHideAt := GetTickCount64 + 2500;
+    if Near then ShowFsBar(True);
+  end
+  else if FFsBar and (GetTickCount64 > FFsHideAt) then
+    ShowFsBar(False);
+end;
+
+procedure TMainForm.ApplyAspect;
+var
+  S: AnsiString;
+  W, H: Integer;
+begin
+  if FPlayer = nil then Exit;
+  if not Assigned(libvlc_video_set_aspect_ratio) then Exit;
+  W := pnlVideo.ClientWidth;
+  H := pnlVideo.ClientHeight;
+  if (W < 10) or (H < 10) then
+  begin
+    W := 16;
+    H := 9;
+  end;
+  case FAspect of
+    1: S := '16:9';
+    2: S := '4:3';
+    3: S := IntToStr(W) + ':' + IntToStr(H);
+  else
+    S := '';
+  end;
+  if S = '' then libvlc_video_set_aspect_ratio(FPlayer, nil)
+  else libvlc_video_set_aspect_ratio(FPlayer, PAnsiChar(S));
+  if Assigned(libvlc_video_set_crop_geometry) then
+  begin
+    if FAspect = 4 then
+    begin
+      S := IntToStr(W) + ':' + IntToStr(H);
+      libvlc_video_set_crop_geometry(FPlayer, PAnsiChar(S));
+    end
+    else
+      libvlc_video_set_crop_geometry(FPlayer, nil);
+  end;
+end;
+
+procedure TMainForm.SetAspect(Mode: Integer);
+var
+  i: Integer;
+begin
+  if (Mode < 0) or (Mode > High(ASPECT_NAMES)) then Mode := 0;
+  FAspect := Mode;
+  btnAspect.Caption := ASPECT_SHORT[Mode];
+  btnAspect.Checked := Mode <> 0;
+  btnAspect.Invalidate;
+  for i := 0 to pmAspect.Items.Count - 1 do
+    pmAspect.Items[i].Checked := i = Mode;
+  ApplyAspect;
+  if FPlaying then SetInfo('Формат кадра: ' + ASPECT_NAMES[Mode]);
+end;
+
+procedure TMainForm.AspectClick(Sender: TObject);
+var
+  P: TPoint;
+begin
+  P := btnAspect.ClientToScreen(Point(0, 0));
+  FAspectMenuOpen := True;
+  try
+    pmAspect.PopUp(P.X, P.Y - pmAspect.Items.Count * Sc(24));
+  finally
+    FAspectMenuOpen := False;
+  end;
+  FFsHideAt := GetTickCount64 + 2500;
+end;
+
+procedure TMainForm.AspectItemClick(Sender: TObject);
+begin
+  SetAspect(TMenuItem(Sender).Tag);
+end;
+
+procedure TMainForm.VideoResize(Sender: TObject);
+begin
+  if FAspect >= 3 then ApplyAspect;
 end;
 
 { ====================================================================== }
@@ -2248,7 +2449,8 @@ begin
   FCurrentUrl := Ch.URL;
   FPlaying := True;
   FLastState := -1;
-  FSettings.LastUrl := Ch.URL;
+  { для автозапуска запоминаем только телеканал, не фильм }
+  if not FVod then FSettings.LastUrl := Ch.URL;
   FSettings.PushRecent(Ch.URL);
   if FArchive then
     FPlayerStatus := 'Архив: подключение...'
@@ -2259,6 +2461,7 @@ begin
   chView.Current := Ch;
   btnLive.Visible := FArchive;
   pnlSeek.Visible := FVod;
+  ApplyAspect;
   sldSeek.Position := 0;
   lblTime.Caption := '';
   if FCurMovie <> nil then
@@ -2905,7 +3108,6 @@ begin
   end;
   FSettings.LastTab := segTabs.ItemIndex;
   FSettings.ViewMode := Ord(chView.Mode);
-  if not FPlaying then FSettings.LastUrl := '';
   FSettings.Save;
   tmrStatus.Enabled := False;
 end;
@@ -2975,6 +3177,12 @@ begin
       else if InEdit and (edSearch.Text <> '') then
       begin
         edSearch.Text := '';
+        Key := 0;
+      end;
+    VK_A:
+      if (not InEdit) and (Shift = []) then
+      begin
+        SetAspect((FAspect + 1) mod (High(ASPECT_NAMES) + 1));
         Key := 0;
       end;
     VK_G:
@@ -3747,7 +3955,13 @@ begin
   if FWall then SetChannelWall(False);
   CloseGuide;
   CloseMoviePage;
-  if FSection <> Value then FInCategory := False;
+  if FSection <> Value then
+  begin
+    FInCategory := False;
+    { запрос поиска из другого раздела не переносим }
+    if edSearch.Text <> '' then edSearch.Text := '';
+    tmrSearch.Enabled := False;
+  end;
   FSection := Value;
   FMovieMode := Value = SEC_MOVIES;
   btnRailTv.Checked := Value = SEC_TV;
@@ -3905,10 +4119,25 @@ begin
   B.OnClick := @WelcomeImportClick;
 end;
 
+function CtlFont(C: TControl): TFont;
+begin
+  if C is TLabel then Result := TLabel(C).Font
+  else Result := TFlatButton(C).Font;
+end;
+
+function CtlText(C: TControl): string;
+begin
+  if C is TLabel then Result := TLabel(C).Caption
+  else Result := TFlatButton(C).Caption;
+end;
+
 procedure TMainForm.UpdateWelcome;
 var
-  i, T, CX, CY: Integer;
+  i, T, CX, Y, W, MaxW, H, Gap: Integer;
   C: TControl;
+  Sz: TSize;
+  Ctl: array[1..6] of TControl;
+  Hs: array[1..6] of Integer;
 begin
   if pnlWelcome = nil then Exit;
   if FSettings.PlaylistCount > 0 then
@@ -3919,21 +4148,56 @@ begin
   T := 0;
   if pnlTitle.Visible then T := pnlTitle.Top + pnlTitle.Height;
   pnlWelcome.SetBounds(0, T, pnlRoot.ClientWidth, Math.Max(100, pnlRoot.ClientHeight - T));
-  CX := pnlWelcome.Width div 2;
-  CY := pnlWelcome.Height div 2 - 140;
+  for i := 1 to 6 do Ctl[i] := nil;
   for i := 0 to pnlWelcome.ControlCount - 1 do
   begin
     C := pnlWelcome.Controls[i];
-    case C.Tag of
-      1: C.SetBounds(CX - 300, CY, 600, 40);
-      2: C.SetBounds(CX - 300, CY + 50, 600, 24);
-      3: C.SetBounds(CX - 300, CY + 100, 600, 56);
-      4: C.SetBounds(CX - 300, CY + 168, 600, 56);
-      5: C.SetBounds(CX - 300, CY + 236, 600, 24);
-      6: C.SetBounds(CX - 300, CY + 280, 600, 36);
+    if (C.Tag >= 1) and (C.Tag <= 6) then Ctl[C.Tag] := C;
+  end;
+  { ширина — по самому длинному тексту, но не шире окна }
+  W := Sc(520);
+  for i := 1 to 6 do
+    if Ctl[i] <> nil then
+    begin
+      Sz := MeasureText(CtlFont(Ctl[i]), CtlText(Ctl[i]));
+      if Sz.cx + Sc(48) > W then W := Sz.cx + Sc(48);
     end;
-    if C is TLabel then TLabel(C).Alignment := taCenter;
-    if C is TLabel then TLabel(C).AutoSize := False;
+  MaxW := pnlWelcome.Width - Sc(40);
+  if W > MaxW then W := MaxW;
+  if W < 200 then W := 200;
+  { высоты — по высоте шрифта }
+  for i := 1 to 6 do
+  begin
+    Hs[i] := 0;
+    if Ctl[i] = nil then Continue;
+    Sz := MeasureText(CtlFont(Ctl[i]), 'Ag');
+    H := Sz.cy;
+    if Ctl[i] is TLabel then
+    begin
+      TLabel(Ctl[i]).AutoSize := False;
+      TLabel(Ctl[i]).WordWrap := True;
+      TLabel(Ctl[i]).Alignment := taCenter;
+      { если текст не влез в ширину — даём место под вторую строку }
+      if MeasureText(CtlFont(Ctl[i]), CtlText(Ctl[i])).cx > W - 8 then H := H * 2;
+      Hs[i] := H + Sc(6);
+    end
+    else if i = 6 then
+      Hs[i] := Math.Max(Sc(34), H + Sc(14))
+    else
+      Hs[i] := Math.Max(Sc(50), H * 2 + Sc(8));
+  end;
+  Gap := Sc(12);
+  H := 0;
+  for i := 1 to 6 do Inc(H, Hs[i] + Gap);
+  Inc(H, Gap * 2);
+  CX := pnlWelcome.Width div 2;
+  Y := Math.Max(Sc(10), (pnlWelcome.Height - H) div 2);
+  for i := 1 to 6 do
+  begin
+    if Ctl[i] = nil then Continue;
+    Ctl[i].SetBounds(CX - W div 2, Y, W, Hs[i]);
+    Inc(Y, Hs[i] + Gap);
+    if i = 2 then Inc(Y, Gap * 2);
   end;
   pnlWelcome.Visible := True;
   pnlWelcome.BringToFront;
@@ -3974,6 +4238,14 @@ begin
     FPaused := False;
     FCurMovie := M;
     AfterPlayStarted(Src);
+    { фильм найден и запущен — строку поиска очищаем }
+    if edSearch.Text <> '' then
+    begin
+      edSearch.Text := '';
+      tmrSearch.Enabled := False;
+      ApplyFilter;
+      mvView.Current := M;
+    end;
   end;
 end;
 

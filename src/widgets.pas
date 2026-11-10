@@ -152,8 +152,38 @@ type
 procedure DrawIcon(C: TCanvas; Kind: TIconKind; const R: TRect; Col: TColor; Filled: Boolean);
 procedure SetAccent(Index: Integer);
 function BlendColor(A, B: TColor; T: Double): TColor;
+{ Размер с учётом масштаба экрана Windows (100 %, 125 %, 150 %...). }
+function Sc(V: Integer): Integer;
+{ Ширина и высота текста шрифтом F. }
+function MeasureText(F: TFont; const S: string): TSize;
 
 implementation
+
+uses
+  Forms;
+
+function Sc(V: Integer): Integer;
+var
+  Dpi: Integer;
+begin
+  Dpi := Screen.PixelsPerInch;
+  if Dpi < 96 then Dpi := 96;
+  Result := MulDiv(V, Dpi, 96);
+end;
+
+var
+  GMeasureBmp: TBitmap = nil;
+
+function MeasureText(F: TFont; const S: string): TSize;
+begin
+  if GMeasureBmp = nil then
+  begin
+    GMeasureBmp := TBitmap.Create;
+    GMeasureBmp.SetSize(8, 8);
+  end;
+  GMeasureBmp.Canvas.Font.Assign(F);
+  Result := GMeasureBmp.Canvas.TextExtent(S);
+end;
 
 procedure SetAccent(Index: Integer);
 begin
@@ -171,6 +201,35 @@ begin
   rb := B and $FF; gb := (B shr 8) and $FF; bb := (B shr 16) and $FF;
   Result := RGBToColor(Round(ra + (rb - ra) * T), Round(ga + (gb - ga) * T),
     Round(ba + (bb - ba) * T));
+end;
+
+procedure DrawGear(C: TCanvas; cx, cy, Ro, Ri: Integer);
+const
+  TEETH = 8;
+var
+  P: array of TPoint;
+  i, k: Integer;
+  A, Step: Double;
+
+  procedure Add(Ang: Double; R: Integer);
+  begin
+    P[k] := Point(cx + Round(R * Cos(Ang)), cy + Round(R * Sin(Ang)));
+    Inc(k);
+  end;
+
+begin
+  SetLength(P, TEETH * 4);
+  k := 0;
+  Step := 2 * Pi / TEETH;
+  for i := 0 to TEETH - 1 do
+  begin
+    A := i * Step - Pi / 2;
+    Add(A - Step * 0.30, Ri);
+    Add(A - Step * 0.17, Ro);
+    Add(A + Step * 0.17, Ro);
+    Add(A + Step * 0.30, Ri);
+  end;
+  C.Polygon(P);
 end;
 
 procedure DrawStar(C: TCanvas; cx, cy, r: Integer; Filled: Boolean);
@@ -339,15 +398,11 @@ begin
       end;
     ikSettings:
       begin
-        C.Pen.Width := 3;
-        for i := 0 to 3 do
-          C.Line(cx + Round((s + 1) * Cos(i * Pi / 4)), cy + Round((s + 1) * Sin(i * Pi / 4)),
-                 cx - Round((s + 1) * Cos(i * Pi / 4)), cy - Round((s + 1) * Sin(i * Pi / 4)));
-        C.Pen.Width := 1;
-        C.Ellipse(cx - s + 2, cy - s + 2, cx + s - 1, cy + s - 1);
-        C.Brush.Color := clrTitle;
-        C.Pen.Color := clrTitle;
-        C.Ellipse(cx - 2, cy - 2, cx + 3, cy + 3);
+        { шестерёнка: 8 зубцов контуром и кольцо в центре }
+        C.Pen.Width := 2;
+        C.Brush.Style := bsClear;
+        DrawGear(C, cx, cy, s + 3, s);
+        C.Ellipse(cx - s div 2 + 1, cy - s div 2 + 1, cx + s div 2, cy + s div 2);
       end;
     ikUp:
       begin
@@ -845,5 +900,8 @@ begin
     if Assigned(FOnChange) then FOnChange(Self);
   end;
 end;
+
+finalization
+  GMeasureBmp.Free;
 
 end.

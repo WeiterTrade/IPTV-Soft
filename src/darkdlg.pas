@@ -13,6 +13,8 @@ uses
 procedure DarkMessage(const Text: string; IsError: Boolean = False; const Title: string = '');
 function DarkConfirm(const Text: string; const YesText: string = 'Да';
   const NoText: string = 'Отмена'; const Title: string = 'Подтверждение'): Boolean;
+{ Окно «О программе». }
+procedure DarkAbout(const AppName, Version, Platform: string);
 { Kind: 0 — плейлист ТВ-каналов, 1 — медиатека (фильмы) }
 function DarkEditPlaylist(const Title: string; Kind: Integer;
   var AName, ASource, AEpg: string): Boolean;
@@ -20,7 +22,7 @@ function DarkEditPlaylist(const Title: string; Kind: Integer;
 implementation
 
 uses
-  winframe;
+  Math, winframe, logos, applogo;
 
 type
   TDarkForm = class(TForm)
@@ -97,6 +99,15 @@ begin
   end;
 end;
 
+function LineCount(const S: string): Integer;
+var
+  i: Integer;
+begin
+  Result := 1;
+  for i := 1 to Length(S) do
+    if S[i] = #10 then Inc(Result);
+end;
+
 { TDarkForm }
 
 constructor TDarkForm.CreateDark(const ATitle: string; AWidth: Integer);
@@ -108,8 +119,8 @@ begin
   Font.Color := clrText;
   KeyPreview := True;
   OnKeyDown := @FormKey;
-  ClientWidth := AWidth;
-  ClientHeight := 200;
+  ClientWidth := Sc(AWidth);
+  ClientHeight := Sc(200);
 
   FInner := TPanel.Create(Self);
   FInner.Parent := Self;
@@ -124,7 +135,7 @@ begin
   FTitleBar.BevelOuter := bvNone;
   FTitleBar.Color := clrTitle;
   FTitleBar.ParentColor := False;
-  FTitleBar.Height := 44;
+  FTitleBar.Height := Sc(44);
   FTitleBar.Align := alTop;
   FTitleBar.OnMouseDown := @TitleDown;
 
@@ -133,7 +144,7 @@ begin
   FTitleLbl.Align := alClient;
   FTitleLbl.AutoSize := False;
   FTitleLbl.Layout := tlCenter;
-  FTitleLbl.BorderSpacing.Left := 18;
+  FTitleLbl.BorderSpacing.Left := Sc(18);
   FTitleLbl.Font.Size := 11;
   FTitleLbl.Font.Style := [fsBold];
   FTitleLbl.Font.Color := clrText;
@@ -145,7 +156,7 @@ begin
   FButtons.BevelOuter := bvNone;
   FButtons.Color := clrBg;
   FButtons.ParentColor := False;
-  FButtons.Height := 62;
+  FButtons.Height := Sc(62);
   FButtons.Align := alBottom;
 end;
 
@@ -185,11 +196,11 @@ begin
   Result.Parent := FButtons;
   Result.Bordered := True;
   Result.Caption := S;
-  Result.Width := 140;
+  Result.Width := Math.Max(Sc(140), MeasureText(Result.Font, S).cx + Sc(36));
   Result.Align := alRight;
-  Result.BorderSpacing.Top := 12;
-  Result.BorderSpacing.Bottom := 14;
-  Result.BorderSpacing.Right := 14;
+  Result.BorderSpacing.Top := Sc(12);
+  Result.BorderSpacing.Bottom := Sc(14);
+  Result.BorderSpacing.Right := Sc(14);
   if Primary then
   begin
     Result.Left := 2000;
@@ -207,7 +218,7 @@ function TDarkForm.AddText(const S: string; Y, W: Integer; Dim: Boolean): TLabel
 begin
   Result := TLabel.Create(Self);
   Result.Parent := FInner;
-  Result.Left := 22;
+  Result.Left := Sc(22);
   Result.Top := Y;
   if Dim then
   begin
@@ -219,7 +230,11 @@ begin
     Result.Font.Color := clrText;
     Result.Font.Size := 10;
   end;
-  Result.Caption := WrapText(S, Result.Font, W);
+  Result.Caption := WrapText(S, Result.Font, Sc(W));
+  Result.AutoSize := False;
+  Result.WordWrap := False;
+  Result.Width := Sc(W) + 8;
+  Result.Height := MeasureText(Result.Font, 'Ag').cy * LineCount(Result.Caption) + 4;
 end;
 
 { ---------- сообщение и подтверждение ---------- }
@@ -239,10 +254,10 @@ begin
       Bar.BevelOuter := bvNone;
       Bar.Color := clrDanger;
       Bar.ParentColor := False;
-      Bar.SetBounds(0, 44, 4, 400);
+      Bar.SetBounds(0, Sc(44), Sc(4), Sc(400));
     end;
-    L := F.AddText(Text, 64, 470);
-    F.ClientHeight := 44 + 20 + L.Height + 24 + 62 + 2;
+    L := F.AddText(Text, Sc(64), 470);
+    F.ClientHeight := Sc(44) + Sc(20) + L.Height + Sc(24) + Sc(62) + 2;
     if NoText <> '' then F.AddButton(NoText, False, mrCancel);
     F.AddButton(YesText, True, mrOK);
     Result := F.ShowModal = mrOK;
@@ -265,6 +280,88 @@ function DarkConfirm(const Text: string; const YesText: string; const NoText: st
   const Title: string): Boolean;
 begin
   Result := RunTextDialog(Title, Text, YesText, NoText, False);
+end;
+
+{ ---------- о программе ---------- }
+
+function MakePic(F: TDarkForm; const Px: array of Byte; W, H, Size, X, Y: Integer): TImage;
+var
+  B: TBitmap;
+begin
+  Result := TImage.Create(F);
+  Result.Parent := F.Inner;
+  Result.SetBounds(X, Y, Size, Size);
+  B := BitmapFromRgba(Px, W, H, Size, clrBg);
+  try
+    if B <> nil then Result.Picture.Assign(B);
+  finally
+    B.Free;
+  end;
+end;
+
+function MakeLine(F: TDarkForm; const S: string; X, Y, W, Size: Integer; Bold, Dim: Boolean;
+  Center: Boolean = False): TLabel;
+begin
+  Result := TLabel.Create(F);
+  Result.Parent := F.Inner;
+  Result.AutoSize := False;
+  Result.Font.Size := Size;
+  if Bold then Result.Font.Style := [fsBold];
+  if Dim then Result.Font.Color := clrDim else Result.Font.Color := clrText;
+  if Center then Result.Alignment := taCenter;
+  Result.Caption := S;
+  Result.SetBounds(X, Y, W, MeasureText(Result.Font, 'Ag').cy + 4);
+end;
+
+procedure DarkAbout(const AppName, Version, Platform: string);
+var
+  F: TDarkForm;
+  Y, X, W, PicL, PicT: Integer;
+  L: TLabel;
+  Sep: TPanel;
+begin
+  F := TDarkForm.CreateDark('О программе', 520);
+  try
+    W := F.ClientWidth;
+    { значок и название программы }
+    PicL := Sc(28);
+    Y := Sc(44) + Sc(24);
+    MakePic(F, APPBIG_RGBA, APPBIG_W, APPBIG_H, Sc(80), PicL, Y);
+    X := PicL + Sc(80) + Sc(20);
+    L := MakeLine(F, AppName, X, Y + Sc(4), W - X - Sc(20), 18, True, False);
+    L := MakeLine(F, 'Версия ' + Version + '  ·  ' + Platform, X, L.Top + L.Height + Sc(4),
+      W - X - Sc(20), 10, False, True);
+    MakeLine(F, 'Плеер IPTV-каналов и фильмов с телепрограммой и архивом', X,
+      L.Top + L.Height + Sc(6), W - X - Sc(20), 9, False, True);
+    Inc(Y, Sc(80) + Sc(22));
+
+    Sep := TPanel.Create(F);
+    Sep.Parent := F.Inner;
+    Sep.BevelOuter := bvNone;
+    Sep.Color := clrFrame;
+    Sep.ParentColor := False;
+    Sep.SetBounds(Sc(28), Y, W - Sc(56), 1);
+    Inc(Y, Sc(22));
+
+    { команда }
+    PicT := Y;
+    MakePic(F, TEAM_RGBA, TEAM_W, TEAM_H, Sc(96), PicL, PicT);
+    X := PicL + Sc(96) + Sc(20);
+    L := MakeLine(F, 'Aristocrat TEAM', X, PicT + Sc(14), W - X - Sc(20), 14, True, False);
+    L := MakeLine(F, 'Разработчик:', X, L.Top + L.Height + Sc(8), W - X - Sc(20), 9, False, True);
+    MakeLine(F, 'Олег Поляев', X, L.Top + L.Height, W - X - Sc(20), 11, False, False);
+    Inc(Y, Sc(96) + Sc(24));
+
+    L := MakeLine(F, '© 2026 Aristocrat TEAM  ✦  Все права защищены', Sc(20), Y, W - Sc(40), 9,
+      False, True, True);
+    Inc(Y, L.Height + Sc(14));
+
+    F.ClientHeight := Y + Sc(62) + 2;
+    F.AddButton('Закрыть', True, mrOK);
+    F.ShowModal;
+  finally
+    F.Free;
+  end;
 end;
 
 { ---------- плейлист ---------- }
@@ -298,12 +395,19 @@ begin
   end;
 end;
 
+function EditHeight(F: TFont): Integer;
+begin
+  Result := MeasureText(F, 'Ag').cy + Sc(12);
+  if Result < Sc(28) then Result := Sc(28);
+end;
+
 function MakeEdit(F: TDarkForm; Y, W: Integer; const Hint: string): TEdit;
 begin
   Result := TEdit.Create(F);
   Result.Parent := F.Inner;
   Result.Font.Color := clWindowText;
-  Result.SetBounds(22, Y, W, 28);
+  Result.AutoSize := False;
+  Result.SetBounds(Sc(22), Y, Sc(W), EditHeight(Result.Font));
   Result.TextHint := Hint;
 end;
 
@@ -332,40 +436,46 @@ var
   F: TPlaylistForm;
   Y: Integer;
   B: TFlatButton;
+  L: TLabel;
 begin
   F := TPlaylistForm.CreateDark(Title, 600);
   try
     F.OnValidate := @F.Validate;
-    Y := 62;
+    Y := Sc(62);
     if Kind = 1 then
-      F.AddText('Медиатека — это плейлист M3U с фильмами и сериалами. Он появится в разделе «Фильмы» ' +
+      L := F.AddText('Медиатека — это плейлист M3U с фильмами и сериалами. Он появится в разделе «Фильмы» ' +
         'с постерами, без повторов и по категориям.', Y, 550, True)
     else
-      F.AddText('Плейлист M3U с телеканалами. Телепрограмма подтянется сама, если ссылка на неё ' +
+      L := F.AddText('Плейлист M3U с телеканалами. Телепрограмма подтянется сама, если ссылка на неё ' +
         'указана в плейлисте.', Y, 550, True);
-    Inc(Y, 50);
-    F.AddText('Название', Y, 550);
-    F.edName := MakeEdit(F, Y + 24, 554, 'например, Мой провайдер');
+    Inc(Y, L.Height + Sc(16));
+    L := F.AddText('Название', Y, 550);
+    Inc(Y, L.Height + Sc(4));
+    F.edName := MakeEdit(F, Y, 554, 'например, Мой провайдер');
     F.edName.Text := AName;
-    Inc(Y, 66);
-    F.AddText('Ссылка (http://...) или файл на компьютере', Y, 550);
-    F.edSource := MakeEdit(F, Y + 24, 420, 'http://provider.tv/playlist.m3u');
+    Inc(Y, F.edName.Height + Sc(16));
+    L := F.AddText('Ссылка (http://...) или файл на компьютере', Y, 550);
+    Inc(Y, L.Height + Sc(4));
+    F.edSource := MakeEdit(F, Y, 420, 'http://provider.tv/playlist.m3u');
     F.edSource.Text := ASource;
     B := TFlatButton.Create(F);
     B.Parent := F.Inner;
     B.Bordered := True;
     B.Caption := 'Файл...';
-    B.SetBounds(452, Y + 21, 124, 34);
+    { кнопка — точно на одной линии с полем и той же высоты }
+    B.SetBounds(F.edSource.Left + F.edSource.Width + Sc(10), F.edSource.Top,
+      Sc(22) + Sc(554) - (F.edSource.Left + F.edSource.Width + Sc(10)), F.edSource.Height);
     B.OnClick := @F.BrowseClick;
-    Inc(Y, 66);
+    Inc(Y, F.edSource.Height + Sc(16));
     if Kind = 0 then
     begin
-      F.AddText('Телепрограмма XMLTV (необязательно)', Y, 550);
-      F.edEpg := MakeEdit(F, Y + 24, 554, 'обычно указана в самом плейлисте');
+      L := F.AddText('Телепрограмма XMLTV (необязательно)', Y, 550);
+      Inc(Y, L.Height + Sc(4));
+      F.edEpg := MakeEdit(F, Y, 554, 'обычно указана в самом плейлисте');
       F.edEpg.Text := AEpg;
-      Inc(Y, 66);
+      Inc(Y, F.edEpg.Height + Sc(16));
     end;
-    F.ClientHeight := Y + 10 + 62 + 2;
+    F.ClientHeight := Y + Sc(10) + Sc(62) + 2;
     F.AddButton('Отмена', False, mrCancel);
     F.AddButton('Сохранить', True, mrOK);
     F.ActiveControl := F.edSource;
