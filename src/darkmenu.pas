@@ -86,7 +86,7 @@ begin
     ACanvas.Line(ARect.Left + Sc(10), Y, ARect.Right - Sc(10), Y);
     Exit;
   end;
-  if (odSelected in AState) and Mi.Enabled then
+  if (LCLType.odSelected in AState) and Mi.Enabled then
   begin
     ACanvas.Brush.Color := clrHover;
     ACanvas.Pen.Color := clrHover;
@@ -117,7 +117,7 @@ begin
   ACanvas.Font.Style := [];
   if not Mi.Enabled then
     ACanvas.Font.Color := clrDisabled
-  else if (odSelected in AState) then
+  else if (LCLType.odSelected in AState) then
     ACanvas.Font.Color := clWhite
   else
     ACanvas.Font.Color := clrText;
