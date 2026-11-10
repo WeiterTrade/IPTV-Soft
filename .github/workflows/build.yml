@@ -75,24 +75,42 @@ jobs:
       - name: Сборка папки программы
         shell: bash
         run: |
-          D="dist/IPTV Aristocrat"
+          # папка и файл программы называются «IPTV» — так же будут называться ярлыки
+          D="dist/IPTV"
           mkdir -p "$D"
-          cp build/iptv-aristocrat.exe "$D/"
+          cp build/iptv-aristocrat.exe "$D/IPTV.exe"
           V="vlc/vlc-${{ matrix.vlc }}"
           cp "$V/libvlc.dll" "$V/libvlccore.dll" "$D/"
           cp -r "$V/plugins" "$D/"
           rm -rf "$D/plugins/gui" "$D/plugins/visualization" "$D/plugins/video_splitter"
-          # кэш плагинов VLC после удаления лишнего устарел — VLC пересоздаст его сам
+          # кэш модулей VLC пересоздаём: без него VLC при каждом запуске перебирает все модули
           rm -f "$D/plugins/plugins.dat"
+          if [ -f "$V/vlc-cache-gen.exe" ]; then "$V/vlc-cache-gen.exe" "$D/plugins" || true; fi
+          ls -la "$D/plugins/plugins.dat" || echo "plugins.dat не создан"
           cp LICENSE "$D/LICENSE.txt"
-          printf 'IPTV Aristocrat %s — %s\r\n\r\nЗапустите iptv-aristocrat.exe.\r\nЧтобы хранить настройки рядом с программой (на флешке),\r\nсоздайте в этой папке пустой файл portable.txt\r\n' \
+          printf 'IPTV Aristocrat %s — %s\r\n\r\nЗапустите IPTV.exe.\r\nЧтобы хранить настройки рядом с программой (на флешке),\r\nсоздайте в этой папке пустой файл portable.txt\r\n' \
             "$VERSION" "${{ matrix.title }}" > "$D/README.txt"
-          cd dist && 7z a -tzip "../IPTV-Aristocrat-${VERSION}-windows-${{ matrix.flavor }}.zip" "IPTV Aristocrat" > /dev/null
+          cd dist && 7z a -tzip "../IPTV-Aristocrat-${VERSION}-windows-${{ matrix.flavor }}.zip" "IPTV" > /dev/null
+
+      # установщик с ярлыками «IPTV» (Inno Setup 6 работает с Windows 7 и новее)
+      - name: Установщик
+        if: matrix.flavor == 'win7plus'
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          if (-not (Test-Path $iscc)) { throw "Inno Setup не найден" }
+          New-Item -ItemType Directory -Force out | Out-Null
+          & $iscc "/DAppVersion=$env:VERSION" packaging\windows\iptv.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item out\*.exe .
 
       - uses: actions/upload-artifact@v4
         with:
           name: windows-${{ matrix.flavor }}
-          path: IPTV-Aristocrat-*.zip
+          path: |
+            IPTV-Aristocrat-*.zip
+            IPTV-Aristocrat-*-setup.exe
 
   # ---------------------------------------------------------------- Linux
   linux:
