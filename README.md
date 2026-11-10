@@ -10,7 +10,7 @@
 | Система | Что скачивать |
 |---|---|
 | Windows XP, Vista | `IPTV-Aristocrat-…-windows-xp.zip` |
-| Windows 7, 8, 10, 11 | `IPTV-Aristocrat-…-windows-win7plus.zip` |
+| Windows 7, 8, 10, 11 | `IPTV-Aristocrat-…-windows-setup.exe` (установщик) или `…-windows-win7plus.zip` |
 | Ubuntu, Debian, Mint | `iptv-aristocrat_…_amd64.deb` |
 | Fedora, openSUSE и др. | `iptv-aristocrat-…x86_64.rpm` |
 | Любой Linux | `IPTV-Aristocrat-…-x86_64.AppImage` |
@@ -41,7 +41,7 @@
 
 ## Установка
 
-* **Windows:** распакуйте zip и запустите `iptv-aristocrat.exe`. Чтобы хранить
+* **Windows:** запустите установщик `…-setup.exe` (Windows 7 и новее) — появятся ярлыки «IPTV» в меню «Пуск» и на рабочем столе. Или распакуйте zip и запустите `IPTV.exe`. Чтобы хранить
   настройки рядом с программой (например, на флешке), создайте в её папке пустой
   файл `portable.txt`.
 * **Ubuntu / Debian / Mint:** `sudo apt install ./iptv-aristocrat_*_amd64.deb`
