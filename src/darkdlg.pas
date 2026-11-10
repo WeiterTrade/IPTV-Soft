@@ -15,6 +15,8 @@ function DarkConfirm(const Text: string; const YesText: string = 'Да';
   const NoText: string = 'Отмена'; const Title: string = 'Подтверждение'): Boolean;
 { Окно «О программе». }
 procedure DarkAbout(const AppName, Version, Platform: string);
+{ Запрос PIN-кода. Confirm = True — новый код с повтором (не короче 4 символов). }
+function DarkAskPin(const Title, Text: string; Confirm: Boolean; out Pin: string): Boolean;
 { Kind: 0 — плейлист ТВ-каналов, 1 — медиатека (фильмы) }
 function DarkEditPlaylist(const Title: string; Kind: Integer;
   var AName, ASource, AEpg: string): Boolean;
@@ -38,7 +40,17 @@ type
     constructor CreateDark(const ATitle: string; AWidth: Integer);
     function AddButton(const S: string; Primary: Boolean; Res: TModalResult): TFlatButton;
     function AddText(const S: string; Y, W: Integer; Dim: Boolean = False): TLabel;
+    { высота окна — по фактическому содержимому (ничего не прячется под кнопками) }
+    procedure FitHeight;
+    function ContentTop: Integer;
     property Inner: TPanel read FInner;
+  end;
+
+  { окно PIN-кода }
+  TPinForm = class(TDarkForm)
+  public
+    edPin, edPin2: TEdit;
+    function Validate: Boolean;
   end;
 
   { данные окна плейлиста }
@@ -160,6 +172,26 @@ begin
   FButtons.Align := alBottom;
 end;
 
+function TDarkForm.ContentTop: Integer;
+begin
+  Result := FTitleBar.Top + FTitleBar.Height;
+end;
+
+procedure TDarkForm.FitHeight;
+var
+  i, B: Integer;
+  C: TControl;
+begin
+  B := ContentTop;
+  for i := 0 to FInner.ControlCount - 1 do
+  begin
+    C := FInner.Controls[i];
+    if (C = FTitleBar) or (C = FButtons) or not C.Visible then Continue;
+    if C.Top + C.Height > B then B := C.Top + C.Height;
+  end;
+  ClientHeight := B + Sc(18) + FButtons.Height + 2;
+end;
+
 procedure TDarkForm.TitleDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
 begin
   if Button = mbLeft then BeginWindowMove(Self);
@@ -256,10 +288,10 @@ begin
       Bar.ParentColor := False;
       Bar.SetBounds(0, Sc(44), Sc(4), Sc(400));
     end;
-    L := F.AddText(Text, Sc(64), 470);
-    F.ClientHeight := Sc(44) + Sc(20) + L.Height + Sc(24) + Sc(62) + 2;
+    L := F.AddText(Text, F.ContentTop + Sc(20), 470);
     if NoText <> '' then F.AddButton(NoText, False, mrCancel);
     F.AddButton(YesText, True, mrOK);
+    F.FitHeight;
     Result := F.ShowModal = mrOK;
   finally
     F.Free;
@@ -310,7 +342,7 @@ begin
   if Dim then Result.Font.Color := clrDim else Result.Font.Color := clrText;
   if Center then Result.Alignment := taCenter;
   Result.Caption := S;
-  Result.SetBounds(X, Y, W, MeasureText(Result.Font, 'Ag').cy + 4);
+  Result.SetBounds(X, Y, W, WrappedHeight(Result.Font, S, W));
 end;
 
 procedure DarkAbout(const AppName, Version, Platform: string);
@@ -320,20 +352,20 @@ var
   L: TLabel;
   Sep: TPanel;
 begin
-  F := TDarkForm.CreateDark('О программе', 520);
+  F := TDarkForm.CreateDark('О программе', 560);
   try
     W := F.ClientWidth;
     { значок и название программы }
     PicL := Sc(28);
-    Y := Sc(44) + Sc(24);
+    Y := F.ContentTop + Sc(24);
     MakePic(F, APPBIG_RGBA, APPBIG_W, APPBIG_H, Sc(80), PicL, Y);
     X := PicL + Sc(80) + Sc(20);
-    L := MakeLine(F, AppName, X, Y + Sc(4), W - X - Sc(20), 18, True, False);
-    L := MakeLine(F, 'Версия ' + Version + '  ·  ' + Platform, X, L.Top + L.Height + Sc(4),
+    L := MakeLine(F, AppName, X, Y, W - X - Sc(20), 18, True, False);
+    L := MakeLine(F, 'Версия ' + Version + '  ·  ' + Platform, X, L.Top + L.Height,
       W - X - Sc(20), 10, False, True);
-    MakeLine(F, 'Плеер IPTV-каналов и фильмов с телепрограммой и архивом', X,
-      L.Top + L.Height + Sc(6), W - X - Sc(20), 9, False, True);
-    Inc(Y, Sc(80) + Sc(22));
+    L := MakeLine(F, 'Плеер IPTV-каналов и фильмов с телепрограммой и архивом', X,
+      L.Top + L.Height + Sc(2), W - X - Sc(20), 9, False, True);
+    Y := Math.Max(Y + Sc(80), L.Top + L.Height) + Sc(20);
 
     Sep := TPanel.Create(F);
     Sep.Parent := F.Inner;
@@ -341,23 +373,22 @@ begin
     Sep.Color := clrFrame;
     Sep.ParentColor := False;
     Sep.SetBounds(Sc(28), Y, W - Sc(56), 1);
-    Inc(Y, Sc(22));
+    Inc(Y, Sc(20));
 
     { команда }
     PicT := Y;
     MakePic(F, TEAM_RGBA, TEAM_W, TEAM_H, Sc(96), PicL, PicT);
     X := PicL + Sc(96) + Sc(20);
-    L := MakeLine(F, 'Aristocrat TEAM', X, PicT + Sc(14), W - X - Sc(20), 14, True, False);
-    L := MakeLine(F, 'Разработчик:', X, L.Top + L.Height + Sc(8), W - X - Sc(20), 9, False, True);
-    MakeLine(F, 'Олег Поляев', X, L.Top + L.Height, W - X - Sc(20), 11, False, False);
-    Inc(Y, Sc(96) + Sc(24));
+    L := MakeLine(F, 'Aristocrat TEAM', X, PicT + Sc(10), W - X - Sc(20), 14, True, False);
+    L := MakeLine(F, 'Разработчик:', X, L.Top + L.Height + Sc(4), W - X - Sc(20), 9, False, True);
+    L := MakeLine(F, 'Олег Поляев', X, L.Top + L.Height, W - X - Sc(20), 11, False, False);
+    Y := Math.Max(PicT + Sc(96), L.Top + L.Height) + Sc(18);
 
-    L := MakeLine(F, '© 2026 Aristocrat TEAM  ✦  Все права защищены', Sc(20), Y, W - Sc(40), 9,
+    MakeLine(F, '© 2026 Aristocrat TEAM  ✦  Все права защищены', Sc(20), Y, W - Sc(40), 9,
       False, True, True);
-    Inc(Y, L.Height + Sc(14));
 
-    F.ClientHeight := Y + Sc(62) + 2;
     F.AddButton('Закрыть', True, mrOK);
+    F.FitHeight;
     F.ShowModal;
   finally
     F.Free;
@@ -441,7 +472,7 @@ begin
   F := TPlaylistForm.CreateDark(Title, 600);
   try
     F.OnValidate := @F.Validate;
-    Y := Sc(62);
+    Y := F.ContentTop + Sc(18);
     if Kind = 1 then
       L := F.AddText('Медиатека — это плейлист M3U с фильмами и сериалами. Он появится в разделе «Фильмы» ' +
         'с постерами, без повторов и по категориям.', Y, 550, True)
@@ -475,9 +506,9 @@ begin
       F.edEpg.Text := AEpg;
       Inc(Y, F.edEpg.Height + Sc(16));
     end;
-    F.ClientHeight := Y + Sc(10) + Sc(62) + 2;
     F.AddButton('Отмена', False, mrCancel);
     F.AddButton('Сохранить', True, mrOK);
+    F.FitHeight;
     F.ActiveControl := F.edSource;
 
     Result := F.ShowModal = mrOK;
@@ -488,6 +519,69 @@ begin
       AName := Trim(F.edName.Text);
       if AName = '' then AName := GuessName(ASource);
     end;
+  finally
+    F.Free;
+  end;
+end;
+
+
+{ ---------- PIN-код ---------- }
+
+function TPinForm.Validate: Boolean;
+begin
+  Result := False;
+  if edPin2 <> nil then
+  begin
+    if Length(edPin.Text) < 4 then
+    begin
+      DarkMessage('PIN-код должен быть не короче 4 символов.');
+      Exit;
+    end;
+    if edPin.Text <> edPin2.Text then
+    begin
+      DarkMessage('Коды не совпадают. Введите одинаковый код в оба поля.');
+      Exit;
+    end;
+  end
+  else if edPin.Text = '' then
+    Exit;
+  Result := True;
+end;
+
+function DarkAskPin(const Title, Text: string; Confirm: Boolean; out Pin: string): Boolean;
+var
+  F: TPinForm;
+  Y: Integer;
+  L: TLabel;
+begin
+  Pin := '';
+  F := TPinForm.CreateDark(Title, 420);
+  try
+    F.OnValidate := @F.Validate;
+    Y := F.ContentTop + Sc(18);
+    L := F.AddText(Text, Y, 370, True);
+    Inc(Y, L.Height + Sc(12));
+    if Confirm then
+    begin
+      L := F.AddText('Новый PIN-код', Y, 370);
+      Inc(Y, L.Height + Sc(4));
+    end;
+    F.edPin := MakeEdit(F, Y, 374, 'PIN-код');
+    F.edPin.PasswordChar := '*';
+    Inc(Y, F.edPin.Height + Sc(14));
+    if Confirm then
+    begin
+      L := F.AddText('Повторите PIN-код', Y, 370);
+      Inc(Y, L.Height + Sc(4));
+      F.edPin2 := MakeEdit(F, Y, 374, 'ещё раз');
+      F.edPin2.PasswordChar := '*';
+    end;
+    F.AddButton('Отмена', False, mrCancel);
+    F.AddButton('OK', True, mrOK);
+    F.FitHeight;
+    F.ActiveControl := F.edPin;
+    Result := F.ShowModal = mrOK;
+    if Result then Pin := F.edPin.Text;
   finally
     F.Free;
   end;

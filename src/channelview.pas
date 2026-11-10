@@ -542,6 +542,9 @@ begin
         if IsFav then
           DrawIcon(C, ikStar, Rect(R.Right - 60, (R.Top + R.Bottom) div 2 - 11,
             R.Right - 38, (R.Top + R.Bottom) div 2 + 11), clrStar, True);
+        if Ch.Locked then
+          DrawIcon(C, ikLock, Rect(R.Right - 84, (R.Top + R.Bottom) div 2 - 10,
+            R.Right - 64, (R.Top + R.Bottom) div 2 + 10), clrDim, True);
         { стрелка «телепрограмма» }
         Card := GuideRect(R);
         if (Index = FHover) and FHoverGuide then
@@ -604,6 +607,8 @@ begin
         end;
         if IsFav then
           DrawIcon(C, ikStar, Rect(Card.Right - 24, Card.Top + 4, Card.Right - 4, Card.Top + 24), clrStar, True);
+        if Ch.Locked then
+          DrawIcon(C, ikLock, Rect(Card.Left + 4, Card.Top + 4, Card.Left + 22, Card.Top + 22), clrDim, True);
       end;
 
     vmTiles:
@@ -668,6 +673,8 @@ begin
         end;
         if IsFav then
           DrawIcon(C, ikStar, Rect(Card.Right - 62, Card.Top + 4, Card.Right - 44, Card.Top + 22), clrStar, True);
+        if Ch.Locked then
+          DrawIcon(C, ikLock, Rect(Card.Right - 84, Card.Top + 4, Card.Right - 66, Card.Top + 22), clrDim, True);
         { стрелка «телепрограмма» }
         Card := GuideRect(R);
         if (Index = FHover) and FHoverGuide then

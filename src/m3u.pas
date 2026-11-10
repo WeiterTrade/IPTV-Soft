@@ -22,6 +22,8 @@ type
     LogoAlt: string;   { логотип по шаблону из настроек }
     LogoDb: string;    { логотип из базы по названию }
     IsVod: Boolean;    { фильм / сериал, а не телеканал }
+    Hidden: Boolean;   { удалён пользователем из списка }
+    Locked: Boolean;   { защищён паролем (родительский контроль) }
     Options: string;   { параметры VLC (#EXTVLCOPT), по одному на строку }
     CatchupType: string;    { архив: shift, append, default, flussonic, xc }
     CatchupSource: string;  { шаблон ссылки на архив }

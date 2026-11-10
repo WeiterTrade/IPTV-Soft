@@ -7,7 +7,7 @@ unit moviepage;
 interface
 
 uses
-  Classes, SysUtils, Types, Controls, Graphics, StdCtrls, ExtCtrls, Menus, Math,
+  Classes, SysUtils, Types, Controls, Graphics, StdCtrls, ExtCtrls, Menus, Math, Forms,
   movies, m3u, widgets, logos;
 
 type
@@ -24,6 +24,7 @@ type
     lblTitle, lblMeta, lblDirector, lblCast, lblDesc, lblGroups: TLabel;
     pbPoster: TPaintBox;
     pmSources: TPopupMenu;
+    FBox: TScrollBox;
     procedure PosterPaint(Sender: TObject);
     procedure BackClick(Sender: TObject);
     procedure PlayClick(Sender: TObject);
@@ -39,6 +40,7 @@ type
     procedure SetMovie(M: TMovie);
     procedure UpdateInfo;
     procedure SetFavorite(V: Boolean);
+    procedure RefreshPoster;
     property Movie: TMovie read FMovie;
     property OnPlay: TPlayEvent read FOnPlay write FOnPlay;
     property OnBack: TNotifyEvent read FOnBack write FOnBack;
@@ -59,16 +61,26 @@ begin
   Color := clrBg;
   ParentColor := False;
   FLogos := ALogos;
+  { всё содержимое — в прокручиваемой области: длинное описание не обрежется }
+  FBox := TScrollBox.Create(Self);
+  FBox.Parent := Self;
+  FBox.Align := alClient;
+  FBox.BorderStyle := bsNone;
+  FBox.Color := clrBg;
+  FBox.ParentColor := False;
+  FBox.HorzScrollBar.Visible := False;
+  FBox.VertScrollBar.Tracking := True;
+  FBox.VertScrollBar.Increment := 40;
 
   btnBack := TFlatButton.Create(Self);
-  btnBack.Parent := Self;
+  btnBack.Parent := FBox;
   btnBack.Kind := ikBack;
   btnBack.Caption := 'Назад';
   btnBack.Hint := 'Вернуться (Esc)';
   btnBack.OnClick := @BackClick;
 
   pbPoster := TPaintBox.Create(Self);
-  pbPoster.Parent := Self;
+  pbPoster.Parent := FBox;
   pbPoster.OnPaint := @PosterPaint;
 
   lblTitle := MakeLabel(22, True, False);
@@ -79,7 +91,7 @@ begin
   lblDesc := MakeLabel(10, False, False);
 
   btnPlay := TFlatButton.Create(Self);
-  btnPlay.Parent := Self;
+  btnPlay.Parent := FBox;
   btnPlay.Bordered := True;
   btnPlay.Checked := True;
   btnPlay.Kind := ikPlay;
@@ -88,13 +100,13 @@ begin
   btnPlay.OnClick := @PlayClick;
 
   btnSource := TFlatButton.Create(Self);
-  btnSource.Parent := Self;
+  btnSource.Parent := FBox;
   btnSource.Bordered := True;
   btnSource.Caption := 'Источник 1';
   btnSource.OnClick := @SourceClick;
 
   btnFav := TFlatButton.Create(Self);
-  btnFav.Parent := Self;
+  btnFav.Parent := FBox;
   btnFav.Bordered := True;
   btnFav.Kind := ikStar;
   btnFav.Caption := 'В избранное';
@@ -107,7 +119,7 @@ end;
 function TMoviePage.MakeLabel(Size: Integer; Bold, Dim: Boolean): TLabel;
 begin
   Result := TLabel.Create(Self);
-  Result.Parent := Self;
+  Result.Parent := FBox;
   Result.AutoSize := False;
   Result.WordWrap := True;
   Result.Font.Size := Size;
@@ -118,39 +130,71 @@ end;
 
 procedure TMoviePage.LayoutControls;
 var
-  X, Y, W: Integer;
+  X, Y, W, BH, BW, LH, Top0, SPos: Integer;
+
+  procedure Place(L: TLabel; Gap: Integer);
+  var
+    H: Integer;
+  begin
+    H := WrappedHeight(L.Font, L.Caption, W);
+    L.Visible := H > 0;
+    if H = 0 then Exit;
+    L.SetBounds(X, Y, W, H);
+    Inc(Y, H + Gap);
+  end;
+
 begin
-  btnBack.SetBounds(24, 16, 110, 36);
-  pbPoster.SetBounds(40, 70, PW, PH);
-  btnPlay.SetBounds(40, 70 + PH + 18, PW, 48);
-  btnSource.SetBounds(40, 70 + PH + 74, PW div 2 - 4, 38);
-  btnFav.SetBounds(40 + PW div 2 + 4, 70 + PH + 74, PW div 2 - 4, 38);
-  X := 40 + PW + 40;
-  W := Math.Max(200, ClientWidth - X - 40);
-  Y := 64;
-  lblTitle.SetBounds(X, Y, W, 80);
-  Inc(Y, 84);
-  lblMeta.SetBounds(X, Y, W, 24);
-  Inc(Y, 28);
-  lblGroups.SetBounds(X, Y, W, 22);
-  Inc(Y, 34);
-  lblDirector.SetBounds(X, Y, W, 24);
-  Inc(Y, 30);
-  lblCast.SetBounds(X, Y, W, 48);
-  Inc(Y, 60);
-  lblDesc.SetBounds(X, Y, W, Math.Max(100, ClientHeight - Y - 30));
+  if FBox = nil then Exit;
+  { раскладываем при нулевой прокрутке, потом возвращаем её }
+  SPos := FBox.VertScrollBar.Position;
+  FBox.VertScrollBar.Position := 0;
+  LH := MeasureText(btnBack.Font, 'Ag').cy;
+  btnBack.SetBounds(Sc(20), Sc(12), MeasureText(btnBack.Font, 'Назад').cx + LH * 2 + Sc(16), LH + Sc(16));
+  Top0 := btnBack.Top + btnBack.Height + Sc(16);
+  pbPoster.SetBounds(Sc(36), Top0, PW, PH);
+  BH := Math.Max(Sc(44), LH * 2 + Sc(6));
+  btnPlay.SetBounds(Sc(36), Top0 + PH + Sc(16), PW, BH);
+  { две кнопки под «Воспроизвести»: если не влезают в ширину постера — друг под другом }
+  BW := MeasureText(btnSource.Font, btnSource.Caption).cx + Sc(24);
+  if BW + MeasureText(btnFav.Font, btnFav.Caption).cx + LH * 2 + Sc(30) <= PW then
+  begin
+    btnSource.SetBounds(Sc(36), btnPlay.Top + BH + Sc(10), PW div 2 - 4, LH + Sc(18));
+    btnFav.SetBounds(Sc(36) + PW div 2 + 4, btnSource.Top, PW div 2 - 4, LH + Sc(18));
+  end
+  else
+  begin
+    btnSource.SetBounds(Sc(36), btnPlay.Top + BH + Sc(10), PW, LH + Sc(18));
+    btnFav.SetBounds(Sc(36), btnSource.Top + btnSource.Height + Sc(8), PW, LH + Sc(18));
+  end;
+  X := Sc(36) + PW + Sc(36);
+  W := FBox.ClientWidth - X - Sc(36);
+  if W < 200 then W := 200;
+  Y := Top0 - Sc(6);
+  Place(lblTitle, Sc(10));
+  Place(lblMeta, Sc(2));
+  Place(lblGroups, Sc(14));
+  Place(lblDirector, Sc(6));
+  Place(lblCast, Sc(16));
+  Place(lblDesc, Sc(24));
+  FBox.VertScrollBar.Position := SPos;
+end;
+
+procedure TMoviePage.RefreshPoster;
+begin
+  pbPoster.Invalidate;
 end;
 
 procedure TMoviePage.Resize;
 begin
   inherited Resize;
-  if pbPoster <> nil then LayoutControls;
+  if (pbPoster <> nil) and (FBox <> nil) then LayoutControls;
 end;
 
 procedure TMoviePage.SetMovie(M: TMovie);
 begin
   FMovie := M;
   FSource := 0;
+  FBox.VertScrollBar.Position := 0;
   UpdateInfo;
   pbPoster.Invalidate;
 end;
@@ -160,6 +204,7 @@ begin
   if V then btnFav.IconColor := clrStar else btnFav.IconColor := clrText;
   if V then btnFav.Caption := 'В избранном' else btnFav.Caption := 'В избранное';
   btnFav.Invalidate;
+  LayoutControls;
 end;
 
 procedure TMoviePage.UpdateInfo;
@@ -214,6 +259,7 @@ begin
   btnSource.Caption := 'Источник ' + IntToStr(FSource + 1) + ' из ' + IntToStr(FMovie.Sources.Count);
   btnSource.Enabled := FMovie.Sources.Count > 1;
   btnSource.Invalidate;
+  LayoutControls;
 end;
 
 procedure TMoviePage.PosterPaint(Sender: TObject);

@@ -18,6 +18,13 @@ type
   public
     Name, Source, Epg: string;
     Kind: Integer;   { 0 — ТВ-каналы, 1 — медиатека (фильмы) }
+    { удалённые пользователем каналы и категории этого плейлиста:
+      c:<ссылка>, n:<название|категория>, g:<категория>.
+      При обновлении плейлиста они не возвращаются; пропадают только
+      вместе с самим плейлистом. }
+    Hidden: TStringList;
+    constructor Create;
+    destructor Destroy; override;
   end;
 
   TAppSettings = class
@@ -26,6 +33,7 @@ type
     FFavorites: TStringList;
     FRecent: TStringList;
     FEpgSources: TStringList;
+    FLocks: TStringList;
     procedure ReadAll(Ini: TCustomIniFile; WithWindow: Boolean);
     procedure WriteAll(Ini: TCustomIniFile; WithWindow: Boolean);
     procedure ReadList(Ini: TCustomIniFile; const Sec: string; L: TStrings);
@@ -61,6 +69,8 @@ type
     LogoDbEnabled: Boolean;      { подбирать логотипы по названию из базы iptv-org }
     LogoProxy: Boolean;          { преобразовывать неподдерживаемые логотипы через images.weserv.nl }
     LogoTemplate: string;        // свой источник логотипов: ссылка с подстановкой name или id в фигурных скобках
+    { родительский контроль: хэш PIN-кода (пусто — не задан) }
+    ParentPin: string;
     { окно }
     SideWidth: Integer;
     InfoHeight: Integer;         { высота расписания под видео }
@@ -88,6 +98,10 @@ type
     property Recent: TStringList read FRecent;
     property Favorites: TStringList read FFavorites;
     property EpgSources: TStringList read FEpgSources;
+    { защищённые паролем каналы и категории (c:/n:/g: — как в Hidden) }
+    property Locks: TStringList read FLocks;
+    function PinHash(const Pin: string): string;
+    function CheckPin(const Pin: string): Boolean;
   end;
 
 function HashStr(const S: string): string;
@@ -97,6 +111,31 @@ implementation
 
 uses
   Forms;
+
+constructor TPlaylistEntry.Create;
+begin
+  inherited Create;
+  Hidden := TStringList.Create;
+  Hidden.Sorted := True;
+  Hidden.CaseSensitive := True;
+  Hidden.Duplicates := dupIgnore;
+end;
+
+destructor TPlaylistEntry.Destroy;
+begin
+  Hidden.Free;
+  inherited Destroy;
+end;
+
+function TAppSettings.PinHash(const Pin: string): string;
+begin
+  Result := HashStr('aristocrat-pin:' + Pin) + HashStr(Pin + ':parent');
+end;
+
+function TAppSettings.CheckPin(const Pin: string): Boolean;
+begin
+  Result := (ParentPin <> '') and (PinHash(Pin) = ParentPin);
+end;
 
 const
   MAX_RECENT = 40;
@@ -139,6 +178,10 @@ begin
   FFavorites.CaseSensitive := True;
   FRecent := TStringList.Create;
   FEpgSources := TStringList.Create;
+  FLocks := TStringList.Create;
+  FLocks.Sorted := True;
+  FLocks.CaseSensitive := True;
+  FLocks.Duplicates := dupIgnore;
 
   AppDir := ExtractFilePath(Application.ExeName);
   { Переносной режим: файл portable.txt рядом с программой }
@@ -174,6 +217,7 @@ end;
 destructor TAppSettings.Destroy;
 begin
   FEpgSources.Free;
+  FLocks.Free;
   FRecent.Free;
   FFavorites.Free;
   FPlaylists.Free;
@@ -258,7 +302,10 @@ begin
                 Ini.ReadString(Sec, 'Source', ''),
                 Ini.ReadString(Sec, 'Epg', ''),
                 Ini.ReadInteger(Sec, 'Kind', 0));
+    ReadList(Ini, Sec + 'Hidden', Playlist(FPlaylists.Count - 1).Hidden);
   end;
+  ParentPin := Ini.ReadString('Parental', 'Pin', '');
+  ReadList(Ini, 'ParentalLocks', FLocks);
   ReadList(Ini, 'EpgSources', FEpgSources);
   ReadList(Ini, 'Favorites', FFavorites);
   ReadList(Ini, 'Recent', FRecent);
@@ -325,9 +372,10 @@ begin
   end;
 
   i := 1;
-  while Ini.SectionExists('Playlist' + IntToStr(i)) do
+  while Ini.SectionExists('Playlist' + IntToStr(i)) or Ini.SectionExists('Playlist' + IntToStr(i) + 'Hidden') do
   begin
     Ini.EraseSection('Playlist' + IntToStr(i));
+    Ini.EraseSection('Playlist' + IntToStr(i) + 'Hidden');
     Inc(i);
   end;
   Ini.WriteInteger('Playlists', 'Count', FPlaylists.Count);
@@ -338,7 +386,11 @@ begin
     Ini.WriteString(Sec, 'Source', Playlist(i).Source);
     Ini.WriteString(Sec, 'Epg', Playlist(i).Epg);
     Ini.WriteInteger(Sec, 'Kind', Playlist(i).Kind);
+    if Playlist(i).Hidden.Count > 0 then
+      WriteList(Ini, Sec + 'Hidden', Playlist(i).Hidden);
   end;
+  Ini.WriteString('Parental', 'Pin', ParentPin);
+  WriteList(Ini, 'ParentalLocks', FLocks);
   WriteList(Ini, 'EpgSources', FEpgSources);
   WriteList(Ini, 'Favorites', FFavorites);
   WriteList(Ini, 'Recent', FRecent);

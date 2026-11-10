@@ -42,7 +42,7 @@ type
     ikFullscreen, ikStar, ikPlus, ikMinus, ikRefresh, ikEdit, ikRecord,
     ikBack, ikChevron, ikViewList, ikViewCompact, ikViewGrid, ikViewTiles,
     ikWinMin, ikWinMax, ikWinRestore, ikClose, ikSettings, ikExternal, ikUp, ikDown, ikWall, ikPause,
-    ikTv, ikFilm, ikHistory);
+    ikTv, ikFilm, ikHistory, ikLock, ikTrash);
 
   TFlatButton = class(TGraphicControl)
   private
@@ -73,6 +73,7 @@ type
     property BorderSpacing;
     property Hint;
     property ShowHint;
+    property PopupMenu;
     { пункт меню разделов: текст слева, выбранный — с подсветкой и полоской }
     property NavStyle: Boolean read FNavStyle write FNavStyle;
     { кнопка с рамкой и фоном (для страницы настроек) }
@@ -156,6 +157,8 @@ function BlendColor(A, B: TColor; T: Double): TColor;
 function Sc(V: Integer): Integer;
 { Ширина и высота текста шрифтом F. }
 function MeasureText(F: TFont; const S: string): TSize;
+{ Высота текста S шрифтом F с переносом по словам в ширину W. }
+function WrappedHeight(F: TFont; const S: string; W: Integer): Integer;
 
 implementation
 
@@ -181,8 +184,51 @@ begin
     GMeasureBmp := TBitmap.Create;
     GMeasureBmp.SetSize(8, 8);
   end;
+
   GMeasureBmp.Canvas.Font.Assign(F);
   Result := GMeasureBmp.Canvas.TextExtent(S);
+end;
+
+function WrappedHeight(F: TFont; const S: string; W: Integer): Integer;
+var
+  Lines, Words: TStringList;
+  i, j, N, LH: Integer;
+  Cur: string;
+begin
+  LH := MeasureText(F, 'Ag').cy;
+  if S = '' then Exit(0);
+  N := 0;
+  Lines := TStringList.Create;
+  Words := TStringList.Create;
+  try
+    Lines.Text := S;
+    Words.Delimiter := ' ';
+    Words.StrictDelimiter := True;
+    for i := 0 to Lines.Count - 1 do
+    begin
+      Inc(N);
+      Words.DelimitedText := Lines[i];
+      Cur := '';
+      for j := 0 to Words.Count - 1 do
+      begin
+        if (Cur <> '') and (MeasureText(F, Cur + ' ' + Words[j]).cx > W) then
+        begin
+          Inc(N);
+          Cur := Words[j];
+        end
+        else if Cur = '' then
+          Cur := Words[j]
+        else
+          Cur := Cur + ' ' + Words[j];
+      end;
+    end;
+  finally
+    Words.Free;
+    Lines.Free;
+  end;
+  if N < 1 then N := 1;
+  { запас: перенос в TLabel может чуть отличаться от нашего подсчёта }
+  Result := N * LH + LH div 2 + 4;
 end;
 
 procedure SetAccent(Index: Integer);
@@ -434,6 +480,27 @@ begin
           C.Rectangle(cx + s - 4, cy - s + 3 + i * (2 * s - 4) div 2, cx + s - 1, cy - s + 6 + i * (2 * s - 4) div 2);
         end;
         C.Polygon([Point(cx - 2, cy - s div 2), Point(cx - 2, cy + s div 2), Point(cx + s div 2, cy)]);
+      end;
+    ikLock:
+      begin
+        { замок: дужка и корпус }
+        C.Pen.Width := 2;
+        C.Brush.Style := bsClear;
+        C.Arc(cx - s + 3, cy - s - 2, cx + s - 2, cy + s div 2, cx + s, cy - s div 4, cx - s, cy - s div 4);
+        C.Line(cx - s + 3, cy - s div 4, cx - s + 3, cy);
+        C.Line(cx + s - 3, cy - s div 4, cx + s - 3, cy);
+        C.Brush.Style := bsSolid;
+        C.Pen.Width := 1;
+        C.RoundRect(cx - s, cy - 1, cx + s + 1, cy + s + 2, 3, 3);
+      end;
+    ikTrash:
+      begin
+        C.Pen.Width := 2;
+        C.Brush.Style := bsClear;
+        C.Line(cx - s, cy - s + 2, cx + s + 1, cy - s + 2);
+        C.Line(cx - 2, cy - s, cx + 3, cy - s);
+        C.Polyline([Point(cx - s + 2, cy - s + 3), Point(cx - s + 3, cy + s), Point(cx + s - 2, cy + s),
+          Point(cx + s - 1, cy - s + 3)]);
       end;
     ikHistory:
       begin

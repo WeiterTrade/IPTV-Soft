@@ -146,7 +146,7 @@ type
     btnInfoUp, btnInfoDown, btnWall: TFlatButton;
     btnPrev, btnStop, btnNext, btnFav, btnRec, btnExt, btnMute, btnFull, btnSettings: TFlatButton;
     sldVolume: TFlatSlider;
-    tmrStatus, tmrSelect, tmrSearch, tmrFsMouse: TTimer;
+    tmrStatus, tmrSelect, tmrSearch, tmrFsMouse, tmrAspect: TTimer;
     { полноэкранная панель управления и формат кадра }
     btnAspect: TFlatButton;
     pmAspect: TPopupMenu;
@@ -157,6 +157,9 @@ type
     FBottomSaved: Integer;
     pmChannel: TPopupMenu;
     miPlay, miGuide, miExternal, miRecord, miFav, miCopy: TMenuItem;
+    { родительский контроль и удаление из списка }
+    miLock, miLockCat, miHide, miHideCat, miRestore, miPin: TMenuItem;
+    FParentOk: Boolean;
 
     procedure BuildUI;
     function AcquireSlot: Integer;
@@ -292,6 +295,7 @@ type
     procedure AspectClick(Sender: TObject);
     procedure AspectItemClick(Sender: TObject);
     procedure VideoResize(Sender: TObject);
+    procedure AspectTimer(Sender: TObject);
     procedure InfoPaint(Sender: TObject);
     procedure LiveClick(Sender: TObject);
     procedure FormResize(Sender: TObject);
@@ -317,6 +321,18 @@ type
     procedure MenuRecordClick(Sender: TObject);
     procedure MenuFavClick(Sender: TObject);
     procedure MenuCopyClick(Sender: TObject);
+    function TvEntry: TPlaylistEntry;
+    function MenuCategory: string;
+    procedure MarkChannelFlags;
+    function AskParent: Boolean;
+    function EnsurePin: Boolean;
+    procedure MenuLockClick(Sender: TObject);
+    procedure MenuLockCatClick(Sender: TObject);
+    procedure MenuHideClick(Sender: TObject);
+    procedure MenuHideCatClick(Sender: TObject);
+    procedure MenuRestoreClick(Sender: TObject);
+    procedure MenuPinClick(Sender: TObject);
+    procedure HideChannel(Ch: TChannel);
   public
     constructor Create(TheOwner: TComponent); override;
     destructor Destroy; override;
@@ -1147,6 +1163,32 @@ begin
   miCopy.Caption := 'Копировать ссылку на поток';
   miCopy.OnClick := @MenuCopyClick;
   pmChannel.Items.Add(miCopy);
+  pmChannel.Items.AddSeparator;
+  miLock := TMenuItem.Create(pmChannel);
+  miLock.Caption := 'Защитить канал паролем';
+  miLock.OnClick := @MenuLockClick;
+  pmChannel.Items.Add(miLock);
+  miLockCat := TMenuItem.Create(pmChannel);
+  miLockCat.Caption := 'Защитить категорию паролем';
+  miLockCat.OnClick := @MenuLockCatClick;
+  pmChannel.Items.Add(miLockCat);
+  miPin := TMenuItem.Create(pmChannel);
+  miPin.Caption := 'Сменить PIN-код...';
+  miPin.OnClick := @MenuPinClick;
+  pmChannel.Items.Add(miPin);
+  pmChannel.Items.AddSeparator;
+  miHide := TMenuItem.Create(pmChannel);
+  miHide.Caption := 'Удалить канал из списка (Del)';
+  miHide.OnClick := @MenuHideClick;
+  pmChannel.Items.Add(miHide);
+  miHideCat := TMenuItem.Create(pmChannel);
+  miHideCat.Caption := 'Удалить категорию из списка';
+  miHideCat.OnClick := @MenuHideCatClick;
+  pmChannel.Items.Add(miHideCat);
+  miRestore := TMenuItem.Create(pmChannel);
+  miRestore.Caption := 'Вернуть удалённые каналы';
+  miRestore.OnClick := @MenuRestoreClick;
+  pmChannel.Items.Add(miRestore);
   chView.PopupMenu := pmChannel;
 
   { ---------- основная часть ---------- }
@@ -1237,7 +1279,7 @@ begin
 
   btnSettings := MakeButton(pnlControls, ikSettings, alRight, 'Настройки', @SettingsClick);
   btnSettings.Left := 3100;
-  btnAspect := MakeButton(pnlControls, ikNone, alRight, 'Формат кадра: 16:9, 4:3, растянуть, заполнить (A)', @AspectClick);
+  btnAspect := MakeButton(pnlControls, ikNone, alRight, 'Формат кадра (A). Щелчок — следующий, правая кнопка — список', @AspectClick);
   btnAspect.Bordered := True;
   btnAspect.Caption := 'Авто';
   btnAspect.Width := MeasureText(btnAspect.Font, 'Заполнить').cx + 30;
@@ -1256,6 +1298,7 @@ begin
     pmAspect.Items.Add(miAsp);
   end;
   pmAspect.Items[0].Checked := True;
+  btnAspect.PopupMenu := pmAspect;
   btnFull := MakeButton(pnlControls, ikFullscreen, alRight, 'На весь экран без рамок (F11, двойной щелчок)', @FullClick);
   btnFull.Left := 3000;
   sldVolume := TFlatSlider.Create(Self);
@@ -1305,6 +1348,10 @@ begin
   tmrFsMouse.Enabled := False;
   tmrFsMouse.Interval := 150;
   tmrFsMouse.OnTimer := @FsMouseTimer;
+  tmrAspect := TTimer.Create(Self);
+  tmrAspect.Enabled := False;
+  tmrAspect.Interval := 300;
+  tmrAspect.OnTimer := @AspectTimer;
 end;
 
 procedure TMainForm.InitVlc;
@@ -1681,6 +1728,8 @@ begin
     UpdateSideMax;
   end;
   ApplyAspect;
+  tmrAspect.Enabled := False;
+  tmrAspect.Enabled := FAspect <> 0;
 end;
 
 { В полноэкранном режиме панель управления (пауза, перемотка, формат
@@ -1746,8 +1795,17 @@ var
 begin
   if FPlayer = nil then Exit;
   if not Assigned(libvlc_video_set_aspect_ratio) then Exit;
-  W := pnlVideo.ClientWidth;
-  H := pnlVideo.ClientHeight;
+  if FFullscreen then
+  begin
+    { в полном экране — пропорции всего экрана (не зависят от панели снизу) }
+    W := Width;
+    H := Height;
+  end
+  else
+  begin
+    W := pnlVideo.ClientWidth;
+    H := pnlVideo.ClientHeight;
+  end;
   if (W < 10) or (H < 10) then
   begin
     W := 16;
@@ -1790,17 +1848,11 @@ begin
 end;
 
 procedure TMainForm.AspectClick(Sender: TObject);
-var
-  P: TPoint;
 begin
-  P := btnAspect.ClientToScreen(Point(0, 0));
-  FAspectMenuOpen := True;
-  try
-    pmAspect.PopUp(P.X, P.Y - pmAspect.Items.Count * Sc(24));
-  finally
-    FAspectMenuOpen := False;
-  end;
-  FFsHideAt := GetTickCount64 + 2500;
+  { щелчок — следующий формат (название видно на кнопке),
+    правая кнопка мыши — список всех форматов }
+  SetAspect((FAspect + 1) mod (High(ASPECT_NAMES) + 1));
+  FFsHideAt := GetTickCount64 + 3000;
 end;
 
 procedure TMainForm.AspectItemClick(Sender: TObject);
@@ -1810,7 +1862,18 @@ end;
 
 procedure TMainForm.VideoResize(Sender: TObject);
 begin
-  if FAspect >= 3 then ApplyAspect;
+  { пересчитываем «растянуть/заполнить» после того, как размер устоится }
+  if (FAspect >= 3) and not FFullscreen then
+  begin
+    tmrAspect.Enabled := False;
+    tmrAspect.Enabled := True;
+  end;
+end;
+
+procedure TMainForm.AspectTimer(Sender: TObject);
+begin
+  tmrAspect.Enabled := False;
+  ApplyAspect;
 end;
 
 { ====================================================================== }
@@ -2059,6 +2122,7 @@ begin
     FreeAndNil(FPlaylist);
     FPlaylist := T.Playlist;
     T.Playlist := nil;
+    MarkChannelFlags;
     if FPlaying and not FVod then FCurrent := FPlaylist.FindByUrl(FCurrentUrl);
     if not FVod then chView.Current := FCurrent;
     if (FSection = SEC_TV) and not T.Refresh then FInCategory := False;
@@ -2078,7 +2142,7 @@ begin
       if FSettings.AutoPlayLast and not FSettings.UseExternalPlayer and (FSection = SEC_TV) then
       begin
         Ch := FPlaylist.FindByUrl(FSettings.LastUrl);
-        if Ch <> nil then
+        if (Ch <> nil) and not Ch.Hidden and not Ch.Locked then
         begin
           chView.Selected := chView.IndexOfChannel(Ch);
           PlayChannel(Ch);
@@ -2260,7 +2324,7 @@ begin
         NoCatCount := 0;
         for i := 0 to FPlaylist.Count - 1 do
         begin
-          if FPlaylist.Get(i).IsVod then Continue;
+          if FPlaylist.Get(i).IsVod or FPlaylist.Get(i).Hidden then Continue;
           Grp := FPlaylist.Get(i).Group;
           if Grp = '' then
             Inc(NoCatCount)
@@ -2293,7 +2357,7 @@ begin
     for i := 0 to FPlaylist.Count - 1 do
     begin
       Ch := FPlaylist.Get(i);
-      if Ch.IsVod then Continue;
+      if Ch.IsVod or Ch.Hidden then Continue;
       Inc(Total);
       case Tab of
         TAB_FAV: if not IsFav(Ch) then Continue;
@@ -2325,11 +2389,13 @@ end;
 
 procedure TMainForm.OpenCategory(Index: Integer);
 var
-  CatName: string;
+  CatName, Grp: string;
 begin
   CatName := chView.SelectedCategory;
   if (Index >= 0) and chView.CatMode then
   begin
+    if CatName = NO_CATEGORY then Grp := '' else Grp := CatName;
+    if (FSettings.Locks.IndexOf('g:' + Grp) >= 0) and not AskParent then Exit;
     FInCategory := True;
     FCategory := CatName;
     FCategoryNone := CatName = NO_CATEGORY;
@@ -2480,6 +2546,7 @@ end;
 procedure TMainForm.PlayChannel(Ch: TChannel; ForceInternal: Boolean);
 begin
   if Ch = nil then Exit;
+  if Ch.Locked and not AskParent then Exit;
   if FSettings.UseExternalPlayer and not ForceInternal then
   begin
     OpenExternal(Ch, Ch.URL);
@@ -2500,6 +2567,7 @@ var
   Url: string;
 begin
   if (Ch = nil) or (It = nil) then Exit;
+  if Ch.Locked and not AskParent then Exit;
   Url := BuildArchiveUrl(Ch, FSettings.DefaultCatchup, It.Start, It.Stop, NowUtc);
   if Url = '' then
   begin
@@ -3179,6 +3247,13 @@ begin
         edSearch.Text := '';
         Key := 0;
       end;
+    VK_DELETE:
+      if (not InEdit) and (Shift = []) and not FMovieMode and (FSection = SEC_TV) and
+         (chView.SelectedChannel <> nil) then
+      begin
+        HideChannel(chView.SelectedChannel);
+        Key := 0;
+      end;
     VK_A:
       if (not InEdit) and (Shift = []) then
       begin
@@ -3702,7 +3777,7 @@ begin
   begin
     chView.Invalidate;
     pbInfo.Invalidate;
-    if FMoviePageOpen and (pgMovie <> nil) then pgMovie.Invalidate;
+    if FMoviePageOpen and (pgMovie <> nil) then pgMovie.RefreshPoster;
   end;
   if (FPlayer <> nil) and FPlaying then
   begin
@@ -4434,6 +4509,11 @@ begin
   if FMenuMovie <> nil then Clipboard.AsText := FMenuMovie.Url;
 end;
 
+function ChannelNameKey(Ch: TChannel): string;
+begin
+  Result := 'n:' + Ch.Name + '|' + Ch.Group;
+end;
+
 procedure TMainForm.MenuPopup(Sender: TObject);
 var
   Ch: TChannel;
@@ -4446,6 +4526,235 @@ begin
   miFav.Enabled := Ch <> nil;
   miCopy.Enabled := Ch <> nil;
   if IsFav(Ch) then miFav.Caption := 'Убрать из избранного' else miFav.Caption := 'В избранное';
+  miLock.Visible := Ch <> nil;
+  if (Ch <> nil) and ((FSettings.Locks.IndexOf('c:' + Ch.URL) >= 0) or
+     (FSettings.Locks.IndexOf(ChannelNameKey(Ch)) >= 0)) then
+    miLock.Caption := 'Снять пароль с канала'
+  else
+    miLock.Caption := 'Защитить канал паролем';
+  miHide.Visible := Ch <> nil;
+  miLockCat.Visible := (FPlaylist <> nil) and ((Ch <> nil) or chView.CatMode);
+  miHideCat.Visible := miLockCat.Visible;
+  if miLockCat.Visible then
+  begin
+    if FSettings.Locks.IndexOf('g:' + MenuCategory) >= 0 then
+      miLockCat.Caption := 'Снять пароль с категории «' + MenuCategory + '»'
+    else
+      miLockCat.Caption := 'Защитить категорию «' + MenuCategory + '» паролем';
+    miHideCat.Caption := 'Удалить категорию «' + MenuCategory + '» из списка';
+  end;
+  miPin.Visible := FSettings.ParentPin <> '';
+  miRestore.Visible := (TvEntry <> nil) and (TvEntry.Hidden.Count > 0);
+end;
+
+{ ---------- родительский контроль и удаление из списка ---------- }
+
+function TMainForm.TvEntry: TPlaylistEntry;
+var
+  K: Integer;
+begin
+  Result := nil;
+  K := FSettings.LastPlaylist;
+  if (FPlaylist <> nil) and (K >= 0) and (K < FSettings.PlaylistCount) and
+     (FSettings.Playlist(K).Kind = 0) then
+    Result := FSettings.Playlist(K);
+end;
+
+{ Категория для меню: выбранная в списке категорий или категория канала. }
+function TMainForm.MenuCategory: string;
+var
+  Ch: TChannel;
+begin
+  Result := '';
+  if chView.CatMode then
+  begin
+    Result := chView.SelectedCategory;
+    if Result = NO_CATEGORY then Result := '';
+  end
+  else
+  begin
+    Ch := chView.SelectedChannel;
+    if Ch <> nil then Result := Ch.Group;
+  end;
+end;
+
+procedure TMainForm.MarkChannelFlags;
+var
+  i: Integer;
+  Ch: TChannel;
+  E: TPlaylistEntry;
+  L: TStringList;
+begin
+  if FPlaylist = nil then Exit;
+  E := TvEntry;
+  L := FSettings.Locks;
+  for i := 0 to FPlaylist.Count - 1 do
+  begin
+    Ch := FPlaylist.Get(i);
+    Ch.Hidden := (E <> nil) and ((E.Hidden.IndexOf('c:' + Ch.URL) >= 0) or
+      (E.Hidden.IndexOf(ChannelNameKey(Ch)) >= 0) or (E.Hidden.IndexOf('g:' + Ch.Group) >= 0));
+    Ch.Locked := (L.IndexOf('c:' + Ch.URL) >= 0) or (L.IndexOf(ChannelNameKey(Ch)) >= 0) or
+      (L.IndexOf('g:' + Ch.Group) >= 0);
+  end;
+end;
+
+{ Спрашивает PIN-код; после верного ввода до перезапуска программы больше не спрашивает. }
+function TMainForm.AskParent: Boolean;
+var
+  Pin: string;
+begin
+  Result := True;
+  if FParentOk or (FSettings.ParentPin = '') then Exit;
+  Result := False;
+  if FFullscreen then SetFullscreen(False);
+  while DarkAskPin('Родительский контроль', 'Этот канал или категория защищены паролем. ' +
+    'Введите PIN-код.', False, Pin) do
+  begin
+    if FSettings.CheckPin(Pin) then
+    begin
+      FParentOk := True;
+      Exit(True);
+    end;
+    DarkMessage('Неверный PIN-код.', True);
+  end;
+end;
+
+function TMainForm.EnsurePin: Boolean;
+var
+  Pin: string;
+begin
+  if FSettings.ParentPin <> '' then Exit(AskParent);
+  Result := DarkAskPin('Родительский контроль', 'Придумайте PIN-код. Он понадобится, чтобы ' +
+    'открыть защищённые каналы и категории, а также снять защиту.', True, Pin);
+  if Result then
+  begin
+    FSettings.ParentPin := FSettings.PinHash(Pin);
+    FParentOk := False;
+    FSettings.Save;
+  end;
+end;
+
+procedure TMainForm.MenuLockClick(Sender: TObject);
+var
+  Ch: TChannel;
+  i: Integer;
+begin
+  Ch := chView.SelectedChannel;
+  if Ch = nil then Exit;
+  i := FSettings.Locks.IndexOf('c:' + Ch.URL);
+  if i < 0 then i := FSettings.Locks.IndexOf(ChannelNameKey(Ch));
+  if i >= 0 then
+  begin
+    if not AskParent then Exit;
+    i := FSettings.Locks.IndexOf('c:' + Ch.URL);
+    if i >= 0 then FSettings.Locks.Delete(i);
+    i := FSettings.Locks.IndexOf(ChannelNameKey(Ch));
+    if i >= 0 then FSettings.Locks.Delete(i);
+  end
+  else
+  begin
+    if not EnsurePin then Exit;
+    FSettings.Locks.Add('c:' + Ch.URL);
+    FSettings.Locks.Add(ChannelNameKey(Ch));
+    FParentOk := False;
+  end;
+  FSettings.Save;
+  MarkChannelFlags;
+  chView.Invalidate;
+end;
+
+procedure TMainForm.MenuLockCatClick(Sender: TObject);
+var
+  Grp: string;
+  i: Integer;
+begin
+  Grp := MenuCategory;
+  i := FSettings.Locks.IndexOf('g:' + Grp);
+  if i >= 0 then
+  begin
+    if not AskParent then Exit;
+    FSettings.Locks.Delete(i);
+  end
+  else
+  begin
+    if not EnsurePin then Exit;
+    FSettings.Locks.Add('g:' + Grp);
+    FParentOk := False;
+  end;
+  FSettings.Save;
+  MarkChannelFlags;
+  chView.Invalidate;
+end;
+
+procedure TMainForm.MenuPinClick(Sender: TObject);
+var
+  Pin: string;
+begin
+  FParentOk := False;
+  if not AskParent then Exit;
+  if DarkAskPin('Новый PIN-код', 'Введите новый PIN-код. Чтобы совсем отключить родительский ' +
+    'контроль, снимите защиту со всех каналов и категорий.', True, Pin) then
+  begin
+    FSettings.ParentPin := FSettings.PinHash(Pin);
+    FSettings.Save;
+    DarkMessage('PIN-код изменён.');
+  end;
+end;
+
+procedure TMainForm.HideChannel(Ch: TChannel);
+var
+  E: TPlaylistEntry;
+begin
+  E := TvEntry;
+  if (Ch = nil) or (E = nil) then Exit;
+  if Ch.Locked and not AskParent then Exit;
+  if not DarkConfirm('Удалить канал «' + Ch.Name + '» из списка?' + LineEnding + LineEnding +
+    'При обновлении плейлиста он не вернётся. Вернуть его можно через меню ' +
+    '«Вернуть удалённые каналы» или удалив и заново добавив плейлист.', 'Удалить', 'Отмена') then Exit;
+  E.Hidden.Add('c:' + Ch.URL);
+  E.Hidden.Add(ChannelNameKey(Ch));
+  FSettings.Save;
+  MarkChannelFlags;
+  ApplyFilter;
+end;
+
+procedure TMainForm.MenuHideClick(Sender: TObject);
+begin
+  HideChannel(chView.SelectedChannel);
+end;
+
+procedure TMainForm.MenuHideCatClick(Sender: TObject);
+var
+  E: TPlaylistEntry;
+  Grp, Shown: string;
+begin
+  E := TvEntry;
+  if E = nil then Exit;
+  Grp := MenuCategory;
+  if FSettings.Locks.IndexOf('g:' + Grp) >= 0 then
+    if not AskParent then Exit;
+  if Grp = '' then Shown := NO_CATEGORY else Shown := Grp;
+  if not DarkConfirm('Удалить категорию «' + Shown + '» со всеми её каналами из списка?' +
+    LineEnding + LineEnding + 'При обновлении плейлиста она не вернётся.', 'Удалить', 'Отмена') then Exit;
+  E.Hidden.Add('g:' + Grp);
+  FSettings.Save;
+  MarkChannelFlags;
+  if FInCategory and (FCategory = Shown) then FInCategory := False;
+  ApplyFilter;
+end;
+
+procedure TMainForm.MenuRestoreClick(Sender: TObject);
+var
+  E: TPlaylistEntry;
+begin
+  E := TvEntry;
+  if (E = nil) or (E.Hidden.Count = 0) then Exit;
+  if not DarkConfirm('Вернуть в список все удалённые каналы и категории этого плейлиста?',
+    'Вернуть', 'Отмена') then Exit;
+  E.Hidden.Clear;
+  FSettings.Save;
+  MarkChannelFlags;
+  ApplyFilter;
 end;
 
 procedure TMainForm.MenuPlayClick(Sender: TObject);
