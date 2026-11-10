@@ -73,6 +73,8 @@ type
     FGuideOpen: Boolean;
     FGuideChannel: TChannel;
     FInfoOffset, FInfoIdle: Integer;
+    FInfoItems: array of TEpgItem;     { передачи, показанные в расписании под видео }
+    FInfoLinesTop, FInfoLineH, FInfoX: Integer;
     { «все каналы на весь экран» }
     FWall: Boolean;
     FWallPrevMode: TViewMode;
@@ -88,6 +90,8 @@ type
     { элементы }
     gripTop, gripBottom, gripLeft, gripRight: TPanel;
     pnlRoot, pnlTitle, pnlSide, pnlPl, pnlViewRow, pnlBack, pnlMain, pnlVideo, pnlInfo, pnlControls: TPanel;
+    pnlBottom: TPanel;
+    splInfo: TSplitter;
     pbTitle, pbInfo: TPaintBox;
     btnWinMin, btnWinMax, btnWinClose: TFlatButton;
     splSide: TSplitter;
@@ -485,6 +489,20 @@ begin
   if not FSystemFrame then
     BorderStyle := bsNone;
 
+  { защита от неправдоподобных сохранённых размеров }
+  if (FSettings.WinWidth < 760) or (FSettings.WinWidth > Screen.DesktopWidth) then
+    FSettings.WinWidth := Math.Min(1180, Screen.Width);
+  if (FSettings.WinHeight < 460) or (FSettings.WinHeight > Screen.DesktopHeight) then
+    FSettings.WinHeight := Math.Min(720, Screen.Height);
+  if (FSettings.SideWidth < 250) or (FSettings.SideWidth > 1200) then
+    FSettings.SideWidth := 360;
+  if (FSettings.InfoHeight < 60) or (FSettings.InfoHeight > 700) then
+    FSettings.InfoHeight := 80;
+  if (FSettings.WinLeft > Screen.DesktopWidth - 100) or (FSettings.WinTop > Screen.DesktopHeight - 100) then
+  begin
+    FSettings.WinLeft := -1;
+    FSettings.WinTop := -1;
+  end;
   Width := FSettings.WinWidth;
   Height := FSettings.WinHeight;
   if (FSettings.WinLeft >= 0) and (FSettings.WinTop >= 0) and
@@ -845,9 +863,20 @@ begin
   { ---------- основная часть ---------- }
   pnlMain := MakePanel(pnlRoot, alClient, clrBg, 0);
   pnlMain.Constraints.MinWidth := 320;
-  pnlControls := MakePanel(pnlMain, alBottom, clrPanel, 50);
-  pnlInfo := MakePanel(pnlMain, alBottom, clrBg, 80);
-  pnlInfo.Top := 0;
+  { нижняя часть: панель управления + расписание; высоту можно тянуть мышью }
+  pnlBottom := MakePanel(pnlMain, alBottom, clrBg, 50 + FSettings.InfoHeight);
+  pnlBottom.Constraints.MinHeight := 50 + 60;
+  splInfo := TSplitter.Create(Self);
+  splInfo.Parent := pnlMain;
+  splInfo.Align := alBottom;
+  splInfo.Height := 5;
+  splInfo.Top := pnlBottom.Top - 6;
+  splInfo.Color := clrFrame;
+  splInfo.ParentColor := False;
+  splInfo.ResizeStyle := rsUpdate;
+  splInfo.MinSize := 60;
+  pnlControls := MakePanel(pnlBottom, alBottom, clrPanel, 50);
+  pnlInfo := MakePanel(pnlBottom, alClient, clrBg, 0);
   btnInfoDown := MakeButton(pnlInfo, ikDown, alRight, 'Следующие передачи (колёсико мыши)', @InfoDownClick);
   btnInfoDown.Width := 30;
   btnInfoDown.Left := 2000;
@@ -1211,6 +1240,10 @@ begin
   if Value then
   begin
     FNormalBounds := BoundsRect;
+    if ((FNormalBounds.Right - FNormalBounds.Left) > Screen.DesktopWidth) or
+       ((FNormalBounds.Bottom - FNormalBounds.Top) > Screen.DesktopHeight) or
+       (FNormalBounds.Left < -2000) or (FNormalBounds.Left > Screen.DesktopWidth) then
+      FNormalBounds := Bounds(80, 60, FSettings.WinWidth, FSettings.WinHeight);
     FMaxed := True;
     UpdateFrameControls;
     BoundsRect := Screen.MonitorFromWindow(Handle).WorkareaRect;
@@ -1236,8 +1269,8 @@ begin
     FFullPrevState := WindowState;
     pnlSide.Visible := False;
     splSide.Visible := False;
-    pnlInfo.Visible := False;
-    pnlControls.Visible := False;
+    pnlBottom.Visible := False;
+    splInfo.Visible := False;
     UpdateFrameControls;
 {$IFDEF WINDOWS}
     if FSystemFrame then
@@ -1266,8 +1299,9 @@ begin
     pnlSide.Visible := True;
     splSide.Visible := True;
     splSide.Left := pnlSide.Left + pnlSide.Width + 1;
-    pnlInfo.Visible := True;
-    pnlControls.Visible := True;
+    pnlBottom.Visible := True;
+    splInfo.Visible := True;
+    splInfo.Top := pnlBottom.Top - 6;
     UpdateFrameControls;
     UpdateSideMax;
   end;
@@ -2101,7 +2135,18 @@ begin
     FSettings.WinWidth := Width;
     FSettings.WinHeight := Height;
   end;
-  FSettings.SideWidth := pnlSide.Width;
+  if (pnlSide.Width >= 250) and (pnlSide.Width <= 1200) then
+    FSettings.SideWidth := pnlSide.Width;
+  if (pnlBottom.Height - 50 >= 60) and (pnlBottom.Height - 50 <= 700) then
+    FSettings.InfoHeight := pnlBottom.Height - 50;
+  if (FSettings.WinWidth < 760) or (FSettings.WinWidth > Screen.DesktopWidth) or
+     (FSettings.WinHeight < 460) or (FSettings.WinHeight > Screen.DesktopHeight) then
+  begin
+    FSettings.WinWidth := 1180;
+    FSettings.WinHeight := 720;
+    FSettings.WinLeft := -1;
+    FSettings.WinTop := -1;
+  end;
   FSettings.LastTab := segTabs.ItemIndex;
   FSettings.ViewMode := Ord(chView.Mode);
   if not FPlaying then FSettings.LastUrl := '';
@@ -2474,21 +2519,24 @@ end;
 procedure TMainForm.InfoPaint(Sender: TObject);
 var
   C: TCanvas;
-  W, X, Y, BarX, BarW, Fill, LS: Integer;
-  It, Nx: TEpgItem;
-  S: string;
+  W, H, X, Y, LS, LineH, k, BarW, TW: Integer;
+  It, Prev: TEpgItem;
+  S, T: string;
   Frac: Double;
   B: TBitmap;
+  Live, Past, Arch: Boolean;
 begin
   C := pbInfo.Canvas;
   W := pbInfo.Width;
+  H := pbInfo.Height;
   C.Brush.Style := bsSolid;
   C.Brush.Color := clrBg;
-  C.FillRect(Rect(0, 0, W, pbInfo.Height));
+  C.FillRect(Rect(0, 0, W, H));
   C.Font.Assign(Font);
   C.Brush.Style := bsClear;
   X := 16;
-  Y := 10;
+  Y := 8;
+  SetLength(FInfoItems, 0);
 
   if FCurrent = nil then
   begin
@@ -2501,14 +2549,18 @@ begin
   { логотип }
   if FSettings.ShowLogos and (FCurrent.Logo <> '') then
   begin
-    LS := pbInfo.Height - 20;
-    B := FLogos.Get(FCurrent.Logo, LS, clrBg);
-    if B <> nil then
+    LS := Math.Min(H - 16, 60);
+    if LS >= 16 then
     begin
-      C.Draw(X, 10, B);
-      Inc(X, LS + 14);
+      B := FLogos.Get(FCurrent.Logo, LS, clrBg);
+      if B <> nil then
+      begin
+        C.Draw(X, 8, B);
+        Inc(X, LS + 14);
+      end;
     end;
   end;
+  FInfoX := X;
 
   C.Font.Size := 12;
   C.Font.Style := [fsBold];
@@ -2531,79 +2583,83 @@ begin
     C.TextOut(X, Y, 'Кнопка «В эфир» внизу вернёт к прямой трансляции');
     Exit;
   end;
-  if FInfoOffset <> 0 then
-  begin
-    It := InfoItem(FInfoOffset);
-    if It <> nil then
-    begin
-      if It.Stop <= FNowUtc then
-      begin
-        S := 'Было:  ';
-        if ItemInArchive(FCurrent, It) then C.Font.Color := clrAccent else C.Font.Color := clrDim;
-      end
-      else
-      begin
-        S := 'Будет:  ';
-        C.Font.Color := clrText;
-      end;
-      S := S + DayTitle(Trunc(UtcToLocal(It.Start))) + '  ' +
-        FormatDateTime('hh:nn', UtcToLocal(It.Start)) + ' - ' +
-        FormatDateTime('hh:nn', UtcToLocal(It.Stop)) + '   ' + It.Title;
-      C.TextOut(X, Y, Ellipsize(C, S, W - X - 16));
-      Inc(Y, C.TextHeight('Ag') + 2);
-      C.Font.Color := clrDim;
-      if ItemInArchive(FCurrent, It) then
-        S := 'Щёлкните, чтобы посмотреть в записи.  ' + It.Desc
-      else
-        S := It.Desc;
-      C.TextOut(X, Y, Ellipsize(C, S, W - X - 16));
-      Exit;
-    end;
-  end;
-  It := nil;
-  Nx := nil;
-  if FCurrent.Epg <> nil then
-  begin
-    It := TEpgChannel(FCurrent.Epg).Current(FNowUtc);
-    Nx := TEpgChannel(FCurrent.Epg).NextAfter(FNowUtc);
-  end;
 
-  if It <> nil then
-  begin
-    BarW := 170;
-    BarX := W - BarW - 16;
-    S := FormatDateTime('hh:nn', UtcToLocal(It.Start)) + ' - ' +
-         FormatDateTime('hh:nn', UtcToLocal(It.Stop)) + '   ' + It.Title;
-    C.Font.Color := clrText;
-    C.TextOut(X, Y, Ellipsize(C, S, BarX - X - 16));
-    Frac := (FNowUtc - It.Start) / Math.Max(1e-9, It.Stop - It.Start);
-    if Frac < 0 then Frac := 0;
-    if Frac > 1 then Frac := 1;
-    Fill := Round(BarW * Frac);
-    C.Brush.Style := bsSolid;
-    C.Brush.Color := clrTrack;
-    C.FillRect(Rect(BarX, Y + 7, BarX + BarW, Y + 11));
-    C.Brush.Color := clrAccent;
-    C.FillRect(Rect(BarX, Y + 7, BarX + Fill, Y + 11));
-    C.Brush.Style := bsClear;
-    Inc(Y, C.TextHeight('Ag') + 2);
-  end
-  else
+  if FCurrent.Epg = nil then
   begin
     C.Font.Color := clrDim;
     if FEpg = nil then
       C.TextOut(X, Y, 'Телепрограмма не загружена')
     else
       C.TextOut(X, Y, 'Нет телепрограммы для этого канала');
-    Inc(Y, C.TextHeight('Ag') + 2);
+    Exit;
   end;
 
-  if Nx <> nil then
+  { список передач: сколько помещается по высоте панели }
+  LineH := C.TextHeight('Ag') + 6;
+  FInfoLinesTop := Y;
+  FInfoLineH := LineH;
+  BarW := 150;
+  Prev := nil;
+  k := 0;
+  while (Y + LineH <= H + 4) or (k = 0) do
   begin
-    C.Font.Color := clrDim;
-    S := 'Далее: ' + FormatDateTime('hh:nn', UtcToLocal(Nx.Start)) + '   ' + Nx.Title;
-    C.TextOut(X, Y, Ellipsize(C, S, W - X - 16));
+    It := InfoItem(FInfoOffset + k);
+    if (It = nil) or (It = Prev) then Break;
+    Live := (It.Start <= FNowUtc) and (FNowUtc < It.Stop);
+    Past := It.Stop <= FNowUtc;
+    Arch := Past and ItemInArchive(FCurrent, It);
+
+    T := FormatDateTime('hh:nn', UtcToLocal(It.Start));
+    if Trunc(UtcToLocal(It.Start)) <> Trunc(Now) then
+      T := FormatDateTime('dd.mm', UtcToLocal(It.Start)) + '  ' + T;
+    S := It.Title;
+    if Arch then S := S + '   · смотреть в записи';
+
+    if Live then
+    begin
+      C.Font.Style := [fsBold];
+      C.Font.Color := clrText;
+    end
+    else if Arch then
+    begin
+      C.Font.Style := [];
+      C.Font.Color := clrAccent;
+    end
+    else if Past then
+    begin
+      C.Font.Style := [];
+      C.Font.Color := clrDim;
+    end
+    else
+    begin
+      C.Font.Style := [];
+      C.Font.Color := clrText;
+    end;
+    C.TextOut(X, Y, T);
+    TW := C.TextWidth('00.00  00:00') + 12;
+    if Live then
+    begin
+      C.TextOut(X + TW, Y, Ellipsize(C, S, W - X - TW - BarW - 32));
+      Frac := (FNowUtc - It.Start) / Math.Max(1e-9, It.Stop - It.Start);
+      if Frac < 0 then Frac := 0;
+      if Frac > 1 then Frac := 1;
+      C.Brush.Style := bsSolid;
+      C.Brush.Color := clrTrack;
+      C.FillRect(Rect(W - BarW - 16, Y + 7, W - 16, Y + 11));
+      C.Brush.Color := clrAccent;
+      C.FillRect(Rect(W - BarW - 16, Y + 7, W - BarW - 16 + Round(BarW * Frac), Y + 11));
+      C.Brush.Style := bsClear;
+    end
+    else
+      C.TextOut(X + TW, Y, Ellipsize(C, S, W - X - TW - 16));
+
+    SetLength(FInfoItems, k + 1);
+    FInfoItems[k] := It;
+    Prev := It;
+    Inc(Y, LineH);
+    Inc(k);
   end;
+  C.Font.Style := [];
 end;
 
 procedure TMainForm.StatusTimer(Sender: TObject);
@@ -2731,12 +2787,20 @@ end;
 
 procedure TMainForm.InfoClick(Sender: TObject);
 var
+  P: TPoint;
+  Idx: Integer;
   It: TEpgItem;
 begin
-  if (FInfoOffset = 0) or FArchive then Exit;
-  It := InfoItem(FInfoOffset);
+  if (FCurrent = nil) or (FInfoLineH <= 0) or (Length(FInfoItems) = 0) then Exit;
+  P := pbInfo.ScreenToClient(Mouse.CursorPos);
+  if P.Y < FInfoLinesTop then Exit;
+  Idx := (P.Y - FInfoLinesTop) div FInfoLineH;
+  if (Idx < 0) or (Idx > High(FInfoItems)) then Exit;
+  It := FInfoItems[Idx];
   if ItemInArchive(FCurrent, It) then
-    PlayArchive(FCurrent, It);
+    PlayArchive(FCurrent, It)
+  else if (It.Start <= FNowUtc) and (FNowUtc < It.Stop) and FArchive then
+    PlayChannel(FCurrent, True);
 end;
 
 procedure TMainForm.InfoDblClick(Sender: TObject);
@@ -2798,8 +2862,18 @@ begin
 end;
 
 procedure TMainForm.FormResize(Sender: TObject);
+var
+  M: Integer;
 begin
-  if WindowState <> wsMinimized then UpdateSideMax;
+  if WindowState = wsMinimized then Exit;
+  UpdateSideMax;
+  if (pnlBottom <> nil) and (pnlMain <> nil) and pnlBottom.Visible then
+  begin
+    M := pnlMain.ClientHeight - 140;
+    if M < 120 then M := 120;
+    if pnlBottom.Constraints.MaxHeight <> M then
+      pnlBottom.Constraints.MaxHeight := M;
+  end;
 end;
 
 procedure TMainForm.FormWindowStateChange(Sender: TObject);

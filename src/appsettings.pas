@@ -57,6 +57,7 @@ type
     DefaultCatchup: Integer;     { тип архива, если в плейлисте не указан (индекс CATCHUP_NAMES) }
     { окно }
     SideWidth: Integer;
+    InfoHeight: Integer;         { высота расписания под видео }
     WinLeft, WinTop, WinWidth, WinHeight: Integer;
     WinMaximized: Boolean;
     { пути }
@@ -153,6 +154,7 @@ begin
   EpgPastDays := 7;
   DefaultCatchup := 0;
   SideWidth := 360;
+  InfoHeight := 80;
   WinWidth := 1180;
   WinHeight := 720;
   WinLeft := -1;
@@ -224,6 +226,7 @@ begin
   if WithWindow then
   begin
     SideWidth := Ini.ReadInteger('Window', 'SideWidth', SideWidth);
+    InfoHeight := Ini.ReadInteger('Window', 'InfoHeight', InfoHeight);
     WinLeft := Ini.ReadInteger('Window', 'Left', WinLeft);
     WinTop := Ini.ReadInteger('Window', 'Top', WinTop);
     WinWidth := Ini.ReadInteger('Window', 'Width', WinWidth);
@@ -291,6 +294,7 @@ begin
   if WithWindow then
   begin
     Ini.WriteInteger('Window', 'SideWidth', SideWidth);
+    Ini.WriteInteger('Window', 'InfoHeight', InfoHeight);
     Ini.WriteInteger('Window', 'Left', WinLeft);
     Ini.WriteInteger('Window', 'Top', WinTop);
     Ini.WriteInteger('Window', 'Width', WinWidth);
