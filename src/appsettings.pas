@@ -53,6 +53,8 @@ type
     RecordDir: string;
     { телепрограмма }
     UsePlaylistEpg: Boolean;
+    EpgPastDays: Integer;        { сколько дней прошедшей программы хранить (архив) }
+    DefaultCatchup: Integer;     { тип архива, если в плейлисте не указан (индекс CATCHUP_NAMES) }
     { окно }
     SideWidth: Integer;
     WinLeft, WinTop, WinWidth, WinHeight: Integer;
@@ -148,6 +150,8 @@ begin
   NetworkCaching := 1500;
   RecordDir := DefaultRecordDir;
   UsePlaylistEpg := True;
+  EpgPastDays := 7;
+  DefaultCatchup := 0;
   SideWidth := 360;
   WinWidth := 1180;
   WinHeight := 720;
@@ -214,6 +218,8 @@ begin
 
   RecordDir := Ini.ReadString('Record', 'Folder', RecordDir);
   UsePlaylistEpg := Ini.ReadBool('Epg', 'UsePlaylistEpg', UsePlaylistEpg);
+  EpgPastDays := Ini.ReadInteger('Epg', 'PastDays', EpgPastDays);
+  DefaultCatchup := Ini.ReadInteger('Epg', 'DefaultCatchup', DefaultCatchup);
 
   if WithWindow then
   begin
@@ -245,6 +251,9 @@ begin
   if NetworkCaching < 100 then NetworkCaching := 100;
   if NetworkCaching > 60000 then NetworkCaching := 60000;
   if RecordDir = '' then RecordDir := DefaultRecordDir;
+  if EpgPastDays < 0 then EpgPastDays := 0;
+  if EpgPastDays > 14 then EpgPastDays := 14;
+  if (DefaultCatchup < 0) or (DefaultCatchup > 4) then DefaultCatchup := 0;
 end;
 
 procedure TAppSettings.WriteAll(Ini: TCustomIniFile; WithWindow: Boolean);
@@ -276,6 +285,8 @@ begin
 
   Ini.WriteString('Record', 'Folder', RecordDir);
   Ini.WriteBool('Epg', 'UsePlaylistEpg', UsePlaylistEpg);
+  Ini.WriteInteger('Epg', 'PastDays', EpgPastDays);
+  Ini.WriteInteger('Epg', 'DefaultCatchup', DefaultCatchup);
 
   if WithWindow then
   begin

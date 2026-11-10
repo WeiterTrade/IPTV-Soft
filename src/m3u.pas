@@ -20,6 +20,9 @@ type
     TvgName: string;
     Logo: string;
     Options: string;   { параметры VLC (#EXTVLCOPT), по одному на строку }
+    CatchupType: string;    { архив: shift, append, default, flussonic, xc }
+    CatchupSource: string;  { шаблон ссылки на архив }
+    CatchupDays: Integer;   { глубина архива, дней }
     Epg: TObject;      { TEpgChannel — проставляется после загрузки телепрограммы }
   end;
 
@@ -28,7 +31,10 @@ type
     FChannels: TFPObjectList;
     FGroups: TStringList;
   public
-    EpgUrl: string;
+    EpgUrl: string;          { первая ссылка на телепрограмму из плейлиста }
+    EpgUrls: TStringList;    { все ссылки на телепрограмму из плейлиста }
+    DefCatchupType, DefCatchupSource: string;
+    DefCatchupDays: Integer;
     constructor Create;
     destructor Destroy; override;
     procedure Add(Ch: TChannel);
@@ -53,10 +59,12 @@ begin
   inherited Create;
   FChannels := TFPObjectList.Create(True);
   FGroups := TStringList.Create;
+  EpgUrls := TStringList.Create;
 end;
 
 destructor TPlaylistData.Destroy;
 begin
+  EpgUrls.Free;
   FGroups.Free;
   FChannels.Free;
   inherited Destroy;
@@ -169,13 +177,45 @@ begin
   end;
 end;
 
+procedure AddEpgUrls(Data: TPlaylistData; const S: string);
+var
+  L: TStringList;
+  i: Integer;
+  U: string;
+begin
+  if Trim(S) = '' then Exit;
+  L := TStringList.Create;
+  try
+    L.Delimiter := ',';
+    L.StrictDelimiter := True;
+    L.DelimitedText := S;
+    for i := 0 to L.Count - 1 do
+    begin
+      U := Trim(L[i]);
+      if (U <> '') and (Data.EpgUrls.IndexOf(U) < 0) then
+        Data.EpgUrls.Add(U);
+    end;
+  finally
+    L.Free;
+  end;
+end;
+
+{ Глубина архива: catchup-days, tvg-rec или timeshift (в днях). }
+function DaysAttr(const Line: string): Integer;
+begin
+  Result := StrToIntDef(GetAttr(Line, 'catchup-days'), 0);
+  if Result <= 0 then Result := StrToIntDef(GetAttr(Line, 'tvg-rec'), 0);
+  if Result <= 0 then Result := StrToIntDef(GetAttr(Line, 'timeshift'), 0);
+  if Result > 60 then Result := 60;
+end;
+
 function ParseM3UFile(const FileName: string; Data: TPlaylistData; out ErrorMsg: string): Boolean;
 var
-  Raw, Line, Up, Tvg, PendingOpts: string;
+  Raw, Line, Up, PendingOpts: string;
   SL, GroupSet: TStringList;
   F: TFileStream;
   Cur: TChannel;
-  i, p, Num: Integer;
+  i, Num: Integer;
 begin
   Result := False;
   ErrorMsg := '';
@@ -222,14 +262,15 @@ begin
 
       if Pos('#EXTM3U', Up) = 1 then
       begin
-        Tvg := GetAttr(Line, 'url-tvg');
-        if Tvg = '' then Tvg := GetAttr(Line, 'x-tvg-url');
-        if Tvg <> '' then
-        begin
-          p := Pos(',', Tvg);
-          if p > 0 then Tvg := Copy(Tvg, 1, p - 1);
-          Data.EpgUrl := Trim(Tvg);
-        end;
+        { ссылки на телепрограмму: url-tvg, x-tvg-url, tvg-url — можно несколько через запятую }
+        AddEpgUrls(Data, GetAttr(Line, 'url-tvg'));
+        AddEpgUrls(Data, GetAttr(Line, 'x-tvg-url'));
+        AddEpgUrls(Data, GetAttr(Line, 'tvg-url'));
+        if Data.EpgUrls.Count > 0 then Data.EpgUrl := Data.EpgUrls[0];
+        Data.DefCatchupType := LowerCase(GetAttr(Line, 'catchup'));
+        if Data.DefCatchupType = '' then Data.DefCatchupType := LowerCase(GetAttr(Line, 'catchup-type'));
+        Data.DefCatchupSource := GetAttr(Line, 'catchup-source');
+        Data.DefCatchupDays := DaysAttr(Line);
       end
       else if Pos('#EXTINF', Up) = 1 then
       begin
@@ -240,6 +281,10 @@ begin
         Cur.TvgName := GetAttr(Line, 'tvg-name');
         Cur.Logo := GetAttr(Line, 'tvg-logo');
         Cur.Group := GetAttr(Line, 'group-title');
+        Cur.CatchupType := LowerCase(GetAttr(Line, 'catchup'));
+        if Cur.CatchupType = '' then Cur.CatchupType := LowerCase(GetAttr(Line, 'catchup-type'));
+        Cur.CatchupSource := GetAttr(Line, 'catchup-source');
+        Cur.CatchupDays := DaysAttr(Line);
         if Cur.Name = '' then Cur.Name := Cur.TvgName;
       end
       else if Pos('#EXTGRP:', Up) = 1 then
@@ -268,6 +313,9 @@ begin
         if Cur.Name = '' then Cur.Name := 'Канал ' + IntToStr(Num);
         Cur.Number := Num;
         Cur.NameLower := UTF8LowerCase(Cur.Name);
+        if Cur.CatchupType = '' then Cur.CatchupType := Data.DefCatchupType;
+        if Cur.CatchupSource = '' then Cur.CatchupSource := Data.DefCatchupSource;
+        if Cur.CatchupDays <= 0 then Cur.CatchupDays := Data.DefCatchupDays;
         Data.Add(Cur);
         if (Cur.Group <> '') and (GroupSet.IndexOf(Cur.Group) < 0) then
         begin

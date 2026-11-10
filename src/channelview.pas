@@ -33,6 +33,10 @@ type
     FDragStartY, FDragStartScroll: Integer;
     FEmptyText: string;
     FDownIndex: Integer;
+    FHoverGuide, FDownGuide: Boolean;
+    FOnGuideClick: TItemEvent;
+    function GuideRect(const R: TRect): TRect;
+    function HasGuideButton: Boolean;
     procedure SetMode(V: TViewMode);
     procedure SetShowNumbers(V: Boolean);
     procedure SetShowLogos(V: Boolean);
@@ -84,6 +88,8 @@ type
     property OnItemClick: TItemEvent read FOnItemClick write FOnItemClick;
     property OnItemActivate: TItemEvent read FOnItemActivate write FOnItemActivate;
     property OnSelectionMoved: TItemEvent read FOnSelectionMoved write FOnSelectionMoved;
+    { стрелка «телепрограмма» в конце строки (виды «список» и «компактный») }
+    property OnGuideClick: TItemEvent read FOnGuideClick write FOnGuideClick;
     property PopupMenu;
     property Align;
     property BorderSpacing;
@@ -361,6 +367,19 @@ begin
   Invalidate;
 end;
 
+function TChannelView.HasGuideButton: Boolean;
+begin
+  Result := (not FCatMode) and (FMode in [vmList, vmCompact]);
+end;
+
+function TChannelView.GuideRect(const R: TRect): TRect;
+var
+  cy: Integer;
+begin
+  cy := (R.Top + R.Bottom) div 2;
+  Result := Rect(R.Right - 34, cy - 13, R.Right - 4, cy + 13);
+end;
+
 function TChannelView.ItemBg(Index: Integer; Card: Boolean): TColor;
 begin
   if Index = FSelected then Result := clrSel
@@ -449,7 +468,7 @@ begin
           C.Brush.Style := bsClear;
           Inc(X, LS + 10);
         end;
-        W := R.Right - X - 30;
+        W := R.Right - X - 64;
         C.Font.Size := 10;
         if IsCur then
         begin
@@ -481,8 +500,21 @@ begin
           end;
         end;
         if IsFav then
-          DrawIcon(C, ikStar, Rect(R.Right - 28, (R.Top + R.Bottom) div 2 - 11,
-            R.Right - 6, (R.Top + R.Bottom) div 2 + 11), clrStar, True);
+          DrawIcon(C, ikStar, Rect(R.Right - 60, (R.Top + R.Bottom) div 2 - 11,
+            R.Right - 38, (R.Top + R.Bottom) div 2 + 11), clrStar, True);
+        { стрелка «телепрограмма» }
+        Card := GuideRect(R);
+        if (Index = FHover) and FHoverGuide then
+        begin
+          C.Brush.Style := bsSolid;
+          C.Brush.Color := clrPress;
+          C.Pen.Color := clrPress;
+          C.RoundRect(Card.Left, Card.Top, Card.Right, Card.Bottom, 8, 8);
+        end;
+        if Ch.Epg <> nil then
+          DrawIcon(C, ikChevron, Card, clrText, False)
+        else
+          DrawIcon(C, ikChevron, Card, clrDisabled, False);
       end;
 
     vmGrid:
@@ -706,10 +738,12 @@ begin
     Exit;
   end;
   Idx := IndexAt(X, Y);
+  FDownGuide := False;
   if Idx >= 0 then
   begin
     FSelected := Idx;
     FDownIndex := Idx;
+    FDownGuide := HasGuideButton and PtInRect(GuideRect(ItemRect(Idx)), Point(X, Y));
     Invalidate;
   end;
 end;
@@ -717,6 +751,7 @@ end;
 procedure TChannelView.MouseMove(Shift: TShiftState; X, Y: Integer);
 var
   Idx, Total: Integer;
+  G: Boolean;
 begin
   inherited MouseMove(Shift, X, Y);
   if FDragThumb then
@@ -729,9 +764,11 @@ begin
     Exit;
   end;
   Idx := IndexAt(X, Y);
-  if Idx <> FHover then
+  G := (Idx >= 0) and HasGuideButton and PtInRect(GuideRect(ItemRect(Idx)), Point(X, Y));
+  if (Idx <> FHover) or (G <> FHoverGuide) then
   begin
     FHover := Idx;
+    FHoverGuide := G;
     Invalidate;
   end;
 end;
@@ -749,9 +786,17 @@ begin
   end;
   if Button <> mbLeft then Exit;
   Idx := IndexAt(X, Y);
-  if (Idx >= 0) and (Idx = FDownIndex) and Assigned(FOnItemClick) then
-    FOnItemClick(Self, Idx);
+  if (Idx >= 0) and (Idx = FDownIndex) then
+  begin
+    if FDownGuide and PtInRect(GuideRect(ItemRect(Idx)), Point(X, Y)) then
+    begin
+      if Assigned(FOnGuideClick) then FOnGuideClick(Self, Idx);
+    end
+    else if Assigned(FOnItemClick) then
+      FOnItemClick(Self, Idx);
+  end;
   FDownIndex := -1;
+  FDownGuide := False;
 end;
 
 procedure TChannelView.MouseLeave;

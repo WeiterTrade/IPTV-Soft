@@ -9,7 +9,7 @@ uses
   Classes, SysUtils, Types, Forms, Controls, Graphics, StdCtrls, ExtCtrls,
   Menus, Dialogs, LCLType, Clipbrd, Math, LazUTF8, FileUtil, Process,
   m3u, epg, vlcdyn, netload, appsettings, widgets, playlistdlg, videohost,
-  channelview, logos, winframe, settingsdlg, applog;
+  channelview, logos, winframe, settingsdlg, applog, guideview, catchup;
 
 type
   TLoadKind = (lkPlaylist, lkEpg);
@@ -22,6 +22,8 @@ type
     Kind: TLoadKind;
     Source: string;
     Sources: TStringList;
+    Want: TStringList;       { каналы плейлиста: id#1tvg-name#1имя }
+    PastDays: Integer;
     CacheDir: string;
     Force: Boolean;
     Generation: Integer;
@@ -64,6 +66,12 @@ type
     FRecPlayer: Pointer;
     FRecFile, FRecName: string;
     FRecStart: TDateTime;
+    { архив и телепрограмма }
+    FArchive: Boolean;
+    FArchiveStart, FArchiveStop: TDateTime;
+    FArchiveTitle: string;
+    FGuideOpen: Boolean;
+    FGuideChannel: TChannel;
     { разное }
     FPlGen, FEpgGen: Integer;
     FUpdating, FAutoPlayDone, FForceEpg, FShown: Boolean;
@@ -84,11 +92,15 @@ type
     btnViewList, btnViewCompact, btnViewGrid, btnViewTiles, btnBack: TFlatButton;
     lblCount, lblBack, lblEmpty, lblStatus, lblRec: TLabel;
     chView: TChannelView;
+    pnlGuide, pnlGuideHead: TPanel;
+    btnGuideBack, btnLive: TFlatButton;
+    lblGuideTitle, lblGuideDesc: TLabel;
+    guide: TGuideView;
     btnPrev, btnStop, btnNext, btnFav, btnRec, btnExt, btnMute, btnFull, btnSettings: TFlatButton;
     sldVolume: TFlatSlider;
     tmrStatus, tmrSelect, tmrSearch: TTimer;
     pmChannel: TPopupMenu;
-    miPlay, miExternal, miRecord, miFav, miCopy: TMenuItem;
+    miPlay, miGuide, miExternal, miRecord, miFav, miCopy: TMenuItem;
 
     procedure BuildUI;
     procedure BuildFrame;
@@ -116,7 +128,14 @@ type
     procedure OpenCategory(Index: Integer);
 
     procedure PlayChannel(Ch: TChannel; ForceInternal: Boolean = False);
-    procedure OpenExternal(Ch: TChannel);
+    function StartMedia(Ch: TChannel; const Url: string): Boolean;
+    procedure AfterPlayStarted(Ch: TChannel);
+    procedure PlayArchive(Ch: TChannel; It: TEpgItem);
+    procedure OpenGuide(Ch: TChannel);
+    procedure RefreshGuide;
+    procedure CloseGuide;
+    procedure UpdateGuideDesc(It: TEpgItem);
+    procedure OpenExternal(Ch: TChannel; const AUrl: string = '');
     procedure StopPlayback;
     procedure StepChannel(Delta: Integer);
     procedure SetFullscreen(Value: Boolean);
@@ -164,7 +183,12 @@ type
     procedure ViewSelectionMoved(Sender: TObject; Index: Integer);
     procedure VideoDblClick(Sender: TObject);
     procedure InfoPaint(Sender: TObject);
-    procedure LogosLoaded(Sender: TObject);
+    procedure LiveClick(Sender: TObject);
+    procedure GuideBackClick(Sender: TObject);
+    procedure GuideSelect(Sender: TObject; Item: TEpgItem);
+    procedure GuideItemClick(Sender: TObject; Item: TEpgItem);
+    procedure ViewGuideClick(Sender: TObject; Index: Integer);
+    procedure MenuGuideClick(Sender: TObject);
     procedure StatusTimer(Sender: TObject);
     procedure SelectTimer(Sender: TObject);
     procedure SearchTimer(Sender: TObject);
@@ -194,6 +218,38 @@ const
 
 var
   GFormAlive: Boolean = False;
+  GPendingReleases: LongInt = 0;
+
+type
+  { Остановка и освобождение плеера VLC в фоне (stop может занимать секунды) }
+  TReleaseThread = class(TThread)
+  public
+    P: Pointer;
+  protected
+    procedure Execute; override;
+  end;
+
+procedure TReleaseThread.Execute;
+begin
+  try
+    libvlc_media_player_stop(P);
+    libvlc_media_player_release(P);
+  except
+  end;
+  InterLockedDecrement(GPendingReleases);
+end;
+
+procedure ReleasePlayerAsync(P: Pointer);
+var
+  T: TReleaseThread;
+begin
+  if P = nil then Exit;
+  InterLockedIncrement(GPendingReleases);
+  T := TReleaseThread.Create(True);
+  T.P := P;
+  T.FreeOnTerminate := True;
+  T.Start;
+end;
 
 function SafeFileName(const S: string): string;
 var
@@ -272,6 +328,7 @@ end;
 constructor TLoaderThread.Create;
 begin
   Sources := TStringList.Create;
+  Want := TStringList.Create;
   FreeOnTerminate := True;
   inherited Create(True);
 end;
@@ -281,6 +338,7 @@ begin
   Playlist.Free;
   Epg.Free;
   Sources.Free;
+  Want.Free;
   inherited Destroy;
 end;
 
@@ -315,11 +373,12 @@ end;
 
 procedure TLoaderThread.Execute;
 var
-  Err, Cache, Errors: string;
-  i: Integer;
+  Err, Cache, Errors, W: string;
+  i, p1, p2: Integer;
   MaxAge: Double;
 begin
   Ok := False;
+  MaskFloatExceptions;
   try
     if Kind = lkPlaylist then
     begin
@@ -341,6 +400,14 @@ begin
     begin
       if Force then MaxAge := 0 else MaxAge := 12;
       Epg := TEpgData.Create;
+      for i := 0 to Want.Count - 1 do
+      begin
+        W := Want[i];
+        p1 := Pos(#1, W);
+        p2 := Pos(#1, Copy(W, p1 + 1, MaxInt)) + p1;
+        if (p1 > 0) and (p2 > p1) then
+          Epg.AddWanted(Copy(W, 1, p1 - 1), Copy(W, p1 + 1, p2 - p1 - 1), Copy(W, p2 + 1, MaxInt));
+      end;
       Errors := '';
       for i := 0 to Sources.Count - 1 do
       begin
@@ -348,7 +415,7 @@ begin
         Cache := CacheDir + 'epg_' + HashStr(Sources[i]) + '.xml';
         if Fetch(Sources[i], Cache, MaxAge, Err) then
         begin
-          if not LoadXmltvFile(Cache, Epg, Err) then
+          if not LoadXmltvFile(Cache, Epg, PastDays, 3, Err) then
             Errors := Errors + Err + '; ';
         end
         else
@@ -412,7 +479,6 @@ begin
 
   Log('настройки: ' + FSettings.ConfigDir);
   FLogos := TLogoCache.Create(FSettings.CacheDir);
-  FLogos.OnLoaded := @LogosLoaded;
 
   Log('построение интерфейса');
   BuildFrame;
@@ -436,6 +502,8 @@ begin
 end;
 
 destructor TMainForm.Destroy;
+var
+  i: Integer;
 begin
   GFormAlive := False;
   if FRecPlayer <> nil then
@@ -450,7 +518,14 @@ begin
     libvlc_media_player_release(FPlayer);
     FPlayer := nil;
   end;
-  if FVlc <> nil then
+  { ждём фоновые остановки плееров (не дольше 3 секунд) }
+  i := 0;
+  while (GPendingReleases > 0) and (i < 60) do
+  begin
+    Sleep(50);
+    Inc(i);
+  end;
+  if (FVlc <> nil) and (GPendingReleases = 0) then
   begin
     libvlc_release(FVlc);
     FVlc := nil;
@@ -681,6 +756,38 @@ begin
   chView.OnItemClick := @ViewItemClick;
   chView.OnItemActivate := @ViewItemActivate;
   chView.OnSelectionMoved := @ViewSelectionMoved;
+  chView.OnGuideClick := @ViewGuideClick;
+
+  { телепрограмма канала (вместо списка каналов) }
+  pnlGuide := MakePanel(pnlSide, alClient, clrSide, 0);
+  pnlGuide.Visible := False;
+  pnlGuideHead := MakePanel(pnlGuide, alTop, clrSide, 40);
+  pnlGuideHead.BorderSpacing.Left := 6;
+  pnlGuideHead.BorderSpacing.Top := 4;
+  btnGuideBack := MakeButton(pnlGuideHead, ikBack, alLeft, 'Назад к каналам (Esc)', @GuideBackClick);
+  lblGuideTitle := TLabel.Create(Self);
+  lblGuideTitle.Parent := pnlGuideHead;
+  lblGuideTitle.Align := alClient;
+  lblGuideTitle.AutoSize := False;
+  lblGuideTitle.Layout := tlCenter;
+  lblGuideTitle.Font.Color := clrText;
+  lblGuideTitle.Font.Style := [fsBold];
+  lblGuideTitle.Font.Size := 10;
+  lblGuideDesc := TLabel.Create(Self);
+  lblGuideDesc.Parent := pnlGuide;
+  lblGuideDesc.Align := alBottom;
+  lblGuideDesc.AutoSize := False;
+  lblGuideDesc.WordWrap := True;
+  lblGuideDesc.Height := 120;
+  lblGuideDesc.Font.Color := clrDim;
+  lblGuideDesc.Font.Size := 8;
+  lblGuideDesc.BorderSpacing.Around := 10;
+  guide := TGuideView.Create(Self);
+  guide.Parent := pnlGuide;
+  guide.Align := alClient;
+  guide.OnItemClick := @GuideItemClick;
+  guide.OnItemActivate := @GuideItemClick;
+  guide.OnSelect := @GuideSelect;
 
   pmChannel := TPopupMenu.Create(Self);
   pmChannel.OnPopup := @MenuPopup;
@@ -688,6 +795,10 @@ begin
   miPlay.Caption := 'Смотреть';
   miPlay.OnClick := @MenuPlayClick;
   pmChannel.Items.Add(miPlay);
+  miGuide := TMenuItem.Create(pmChannel);
+  miGuide.Caption := 'Телепрограмма и архив (E)';
+  miGuide.OnClick := @MenuGuideClick;
+  pmChannel.Items.Add(miGuide);
   miExternal := TMenuItem.Create(pmChannel);
   miExternal.Caption := 'Открыть во внешнем плеере';
   miExternal.OnClick := @MenuExternalClick;
@@ -736,6 +847,11 @@ begin
   btnRec.Left := 400;
   btnExt := MakeButton(pnlControls, ikExternal, alLeft, 'Открыть во внешнем плеере', @ExtClick);
   btnExt.Left := 500;
+  btnLive := MakeButton(pnlControls, ikNone, alLeft, 'Вернуться к прямому эфиру', @LiveClick);
+  btnLive.Caption := 'В эфир';
+  btnLive.Width := 90;
+  btnLive.Left := 600;
+  btnLive.Visible := False;
 
   btnSettings := MakeButton(pnlControls, ikSettings, alRight, 'Настройки', @SettingsClick);
   btnSettings.Left := 3100;
@@ -815,15 +931,6 @@ begin
     Exit;
   end;
   Log('libvlc_new выполнен');
-  FPlayer := libvlc_media_player_new(FVlc);
-  if FPlayer = nil then
-  begin
-    FVlcError := 'Не удалось создать встроенный плеер';
-    pnlVideo.Caption := FVlcError;
-    Exit;
-  end;
-  libvlc_video_set_mouse_input(FPlayer, 0);
-  libvlc_video_set_key_input(FPlayer, 0);
 end;
 
 { ====================================================================== }
@@ -912,8 +1019,8 @@ var
   NoLists: Boolean;
 begin
   NoLists := FSettings.PlaylistCount = 0;
-  lblEmpty.Visible := NoLists;
-  chView.Visible := not NoLists;
+  lblEmpty.Visible := NoLists and not FGuideOpen;
+  chView.Visible := (not NoLists) and not FGuideOpen;
   cbPlaylists.Enabled := not NoLists;
   edSearch.Enabled := not NoLists;
 end;
@@ -1178,7 +1285,7 @@ procedure TMainForm.LoadEpg(Force: Boolean);
 var
   L: TStringList;
   T: TLoaderThread;
-  E: string;
+  E, Key: string;
   i: Integer;
 begin
   L := TStringList.Create;
@@ -1188,8 +1295,11 @@ begin
       E := '';
       if (FSettings.LastPlaylist >= 0) and (FSettings.LastPlaylist < FSettings.PlaylistCount) then
         E := FSettings.Playlist(FSettings.LastPlaylist).Epg;
-      if (E = '') and (FPlaylist <> nil) then E := FPlaylist.EpgUrl;
-      if E <> '' then L.Add(E);
+      if E <> '' then
+        L.Add(E)
+      else if FPlaylist <> nil then
+        for i := 0 to FPlaylist.EpgUrls.Count - 1 do
+          if L.IndexOf(FPlaylist.EpgUrls[i]) < 0 then L.Add(FPlaylist.EpgUrls[i]);
     end;
     for i := 0 to FSettings.EpgSources.Count - 1 do
       if L.IndexOf(FSettings.EpgSources[i]) < 0 then
@@ -1199,11 +1309,15 @@ begin
     begin
       Inc(FEpgGen);
       FEpgKey := '';
+      guide.SetData(nil, 0, NowUtc);
       FreeAndNil(FEpg);
       ResolveEpg;
+      RefreshGuide;
       Exit;
     end;
-    if (not Force) and (FEpg <> nil) and (FEpgKey = L.Text) then
+    Key := L.Text + '|' + IntToStr(FSettings.EpgPastDays) + '|' +
+      HashStr(FSettings.Playlist(FSettings.LastPlaylist).Source);
+    if (not Force) and (FEpg <> nil) and (FEpgKey = Key) then
     begin
       ResolveEpg;
       Exit;
@@ -1213,7 +1327,11 @@ begin
     T := TLoaderThread.Create;
     T.Kind := lkEpg;
     T.Sources.Assign(L);
-    T.Source := L.Text;
+    T.Source := Key;
+    T.PastDays := FSettings.EpgPastDays;
+    if FPlaylist <> nil then
+      for i := 0 to FPlaylist.Count - 1 do
+        T.Want.Add(FPlaylist.Get(i).TvgId + #1 + FPlaylist.Get(i).TvgName + #1 + FPlaylist.Get(i).Name);
     T.CacheDir := FSettings.CacheDir;
     T.Force := Force;
     T.Generation := FEpgGen;
@@ -1243,6 +1361,7 @@ begin
       MessageDlg('Не удалось загрузить плейлист:' + LineEnding + T.ErrorMsg, mtError, [mbOK], 0);
       Exit;
     end;
+    CloseGuide;
     FView.Clear;
     chView.SetChannels(nil);
     chView.Current := nil;
@@ -1283,11 +1402,13 @@ begin
       SetInfo('Телепрограмма недоступна: ' + T.ErrorMsg);
       Exit;
     end;
+    guide.SetData(nil, 0, NowUtc);
     FreeAndNil(FEpg);
     FEpg := T.Epg;
     T.Epg := nil;
     FEpgKey := T.Source;
     ResolveEpg;
+    RefreshGuide;
     SetInfo(T.Warning);
   end;
 end;
@@ -1327,7 +1448,7 @@ begin
   Tab := segTabs.ItemIndex;
   Q := UTF8LowerCase(Trim(edSearch.Text));
   FView.Clear;
-  pnlBack.Visible := (Tab = TAB_CAT) and FInCategory;
+  pnlBack.Visible := (Tab = TAB_CAT) and FInCategory and not FGuideOpen;
   if FInCategory then lblBack.Caption := FCategory;
 
   if FPlaylist = nil then
@@ -1427,29 +1548,26 @@ end;
 { ====================================================================== }
 { воспроизведение }
 
-procedure TMainForm.PlayChannel(Ch: TChannel; ForceInternal: Boolean);
+{ Новый проигрыватель создаётся для каждого канала, а старый останавливается
+  и освобождается в фоновом потоке — окно не замирает при переключении. }
+function TMainForm.StartMedia(Ch: TChannel; const Url: string): Boolean;
 var
-  M: Pointer;
+  M, Old: Pointer;
   SL: TStringList;
   i: Integer;
   Opt: string;
 begin
-  if Ch = nil then Exit;
-  if FSettings.UseExternalPlayer and not ForceInternal then
-  begin
-    OpenExternal(Ch);
-    Exit;
-  end;
-  if FPlayer = nil then
+  Result := False;
+  if FVlc = nil then
   begin
     MessageDlg('Встроенный плеер недоступен.' + LineEnding + FVlcError + LineEnding + LineEnding +
       'Можно включить внешний плеер в Настройках → Плеер.', mtWarning, [mbOK], 0);
     Exit;
   end;
-  if Pos('://', Ch.URL) > 0 then
-    M := libvlc_media_new_location(FVlc, PAnsiChar(Ch.URL))
+  if Pos('://', Url) > 0 then
+    M := libvlc_media_new_location(FVlc, PAnsiChar(Url))
   else
-    M := libvlc_media_new_path(FVlc, PAnsiChar(Ch.URL));
+    M := libvlc_media_new_path(FVlc, PAnsiChar(Url));
   if M = nil then
   begin
     FPlayerStatus := 'Неверная ссылка на поток';
@@ -1472,36 +1590,106 @@ begin
     end;
   end;
 
-  if FPlaying then libvlc_media_player_stop(FPlayer);
+  Old := FPlayer;
+  FPlayer := libvlc_media_player_new(FVlc);
+  if FPlayer = nil then
+  begin
+    libvlc_media_release(M);
+    FPlayer := Old;
+    FVlcError := 'Не удалось создать проигрыватель';
+    Exit;
+  end;
+  if Old <> nil then
+  begin
+    libvlc_audio_set_mute(Old, 1);
+    ReleasePlayerAsync(Old);
+  end;
+  libvlc_video_set_mouse_input(FPlayer, 0);
+  libvlc_video_set_key_input(FPlayer, 0);
   pnlVideo.Caption := '';
   AttachVideoTo(FPlayer, pnlVideo);
   libvlc_media_player_set_media(FPlayer, M);
   libvlc_media_release(M);
   libvlc_media_player_play(FPlayer);
+  Result := True;
+end;
 
+procedure TMainForm.AfterPlayStarted(Ch: TChannel);
+begin
   FCurrent := Ch;
   FCurrentUrl := Ch.URL;
   FPlaying := True;
   FLastState := -1;
   FSettings.LastUrl := Ch.URL;
   FSettings.PushRecent(Ch.URL);
-  FPlayerStatus := 'Подключение...';
+  if FArchive then
+    FPlayerStatus := 'Архив: подключение...'
+  else
+    FPlayerStatus := 'Подключение...';
   UpdateStatusLabel;
   Caption := Ch.Name + ' — ' + APP_NAME;
   chView.Current := Ch;
+  btnLive.Visible := FArchive;
+  if FArchive then guide.PlayingStart := FArchiveStart else guide.PlayingStart := 0;
+  guide.Invalidate;
   UpdateTransport;
   pbInfo.Invalidate;
 end;
 
-procedure TMainForm.OpenExternal(Ch: TChannel);
+procedure TMainForm.PlayChannel(Ch: TChannel; ForceInternal: Boolean);
+begin
+  if Ch = nil then Exit;
+  if FSettings.UseExternalPlayer and not ForceInternal then
+  begin
+    OpenExternal(Ch, Ch.URL);
+    Exit;
+  end;
+  if StartMedia(Ch, Ch.URL) then
+  begin
+    FArchive := False;
+    AfterPlayStarted(Ch);
+  end;
+end;
+
+procedure TMainForm.PlayArchive(Ch: TChannel; It: TEpgItem);
 var
-  Exe: string;
+  Url: string;
+begin
+  if (Ch = nil) or (It = nil) then Exit;
+  Url := BuildArchiveUrl(Ch, FSettings.DefaultCatchup, It.Start, It.Stop, NowUtc);
+  if Url = '' then
+  begin
+    MessageDlg('Для этого канала архив недоступен.' + LineEnding + LineEnding +
+      'Если провайдер поддерживает архив, но не указал это в плейлисте, ' +
+      'выберите тип архива в Настройках → Источники телепрограмм.', mtInformation, [mbOK], 0);
+    Exit;
+  end;
+  if FSettings.UseExternalPlayer then
+  begin
+    OpenExternal(Ch, Url);
+    Exit;
+  end;
+  if StartMedia(Ch, Url) then
+  begin
+    FArchive := True;
+    FArchiveStart := It.Start;
+    FArchiveStop := It.Stop;
+    FArchiveTitle := It.Title;
+    AfterPlayStarted(Ch);
+  end;
+end;
+
+procedure TMainForm.OpenExternal(Ch: TChannel; const AUrl: string);
+var
+  Exe, Url: string;
   P: TProcess;
   Args: TStringList;
   i: Integer;
   HasUrl: Boolean;
 begin
   if Ch = nil then Exit;
+  Url := AUrl;
+  if Url = '' then Url := Ch.URL;
   Exe := FindExternalPlayer(FSettings.ExternalPlayer);
   if Exe = '' then
   begin
@@ -1519,10 +1707,10 @@ begin
     for i := 0 to Args.Count - 1 do
       if Pos('%u', Args[i]) > 0 then
       begin
-        Args[i] := StringReplace(Args[i], '%u', Ch.URL, [rfReplaceAll]);
+        Args[i] := StringReplace(Args[i], '%u', Url, [rfReplaceAll]);
         HasUrl := True;
       end;
-    if not HasUrl then Args.Add(Ch.URL);
+    if not HasUrl then Args.Add(Url);
     P.Executable := Exe;
     P.Parameters.Assign(Args);
     P.Options := [];
@@ -1548,13 +1736,134 @@ end;
 
 procedure TMainForm.StopPlayback;
 begin
-  if FPlayer <> nil then libvlc_media_player_stop(FPlayer);
+  if FPlayer <> nil then
+  begin
+    ReleasePlayerAsync(FPlayer);
+    FPlayer := nil;
+  end;
   FPlaying := False;
+  FArchive := False;
+  btnLive.Visible := False;
+  guide.PlayingStart := 0;
+  guide.Invalidate;
   FPlayerStatus := '';
   UpdateStatusLabel;
   pnlVideo.Caption := 'Остановлено';
   Caption := APP_NAME;
   UpdateTransport;
+end;
+
+procedure TMainForm.LiveClick(Sender: TObject);
+begin
+  if FCurrent <> nil then PlayChannel(FCurrent, True);
+end;
+
+{ ====================================================================== }
+{ телепрограмма канала }
+
+procedure TMainForm.OpenGuide(Ch: TChannel);
+begin
+  if Ch = nil then Exit;
+  FGuideChannel := Ch;
+  FGuideOpen := True;
+  edSearch.Visible := False;
+  pnlViewRow.Visible := False;
+  pnlBack.Visible := False;
+  chView.Visible := False;
+  lblEmpty.Visible := False;
+  pnlGuide.Visible := True;
+  lblGuideTitle.Caption := Ch.Name;
+  RefreshGuide;
+  guide.ScrollToNow;
+  if guide.CanFocus then guide.SetFocus;
+end;
+
+procedure TMainForm.RefreshGuide;
+var
+  Days: Integer;
+  Ec: TEpgChannel;
+begin
+  if not FGuideOpen or (FGuideChannel = nil) then Exit;
+  Days := 0;
+  if HasArchive(FGuideChannel, FSettings.DefaultCatchup) then
+    Days := ArchiveDays(FGuideChannel);
+  Ec := nil;
+  if FGuideChannel.Epg <> nil then Ec := TEpgChannel(FGuideChannel.Epg);
+  if FEpg = nil then
+    guide.EmptyText := 'Телепрограмма ещё не загружена или недоступна.'
+  else
+    guide.EmptyText := 'Для этого канала нет телепрограммы.';
+  guide.SetData(Ec, Days, NowUtc);
+  if FArchive and (FCurrent = FGuideChannel) then guide.PlayingStart := FArchiveStart
+  else guide.PlayingStart := 0;
+  if Days > 0 then
+    lblGuideTitle.Hint := 'Архив: ' + IntToStr(Days) + ' дн.'
+  else
+    lblGuideTitle.Hint := 'Архив для этого канала не указан';
+  lblGuideTitle.ShowHint := True;
+  UpdateGuideDesc(guide.SelectedItem);
+end;
+
+procedure TMainForm.CloseGuide;
+begin
+  if not FGuideOpen then Exit;
+  FGuideOpen := False;
+  FGuideChannel := nil;
+  pnlGuide.Visible := False;
+  guide.SetData(nil, 0, NowUtc);
+  edSearch.Visible := True;
+  pnlViewRow.Visible := True;
+  pnlBack.Visible := (segTabs.ItemIndex = TAB_CAT) and FInCategory;
+  UpdateEmptyState;
+  if chView.Visible and chView.CanFocus then chView.SetFocus;
+end;
+
+procedure TMainForm.UpdateGuideDesc(It: TEpgItem);
+var
+  S: string;
+begin
+  if It = nil then
+  begin
+    lblGuideDesc.Caption := '';
+    Exit;
+  end;
+  S := FormatDateTime('dd.mm  hh:nn', UtcToLocal(It.Start)) + ' - ' +
+       FormatDateTime('hh:nn', UtcToLocal(It.Stop)) + '   ' + It.Title;
+  if guide.IsArchive(It) then S := S + LineEnding + 'Доступно в записи — щёлкните, чтобы смотреть.'
+  else if guide.IsLive(It) then S := S + LineEnding + 'Сейчас в эфире — щёлкните, чтобы смотреть.';
+  if It.Desc <> '' then S := S + LineEnding + LineEnding + It.Desc;
+  lblGuideDesc.Caption := S;
+end;
+
+procedure TMainForm.GuideBackClick(Sender: TObject);
+begin
+  CloseGuide;
+end;
+
+procedure TMainForm.GuideSelect(Sender: TObject; Item: TEpgItem);
+begin
+  UpdateGuideDesc(Item);
+end;
+
+procedure TMainForm.GuideItemClick(Sender: TObject; Item: TEpgItem);
+begin
+  if (Item = nil) or (FGuideChannel = nil) then Exit;
+  if guide.IsLive(Item) then
+    PlayChannel(FGuideChannel)
+  else if guide.IsArchive(Item) then
+    PlayArchive(FGuideChannel, Item)
+  else
+    UpdateGuideDesc(Item);
+end;
+
+procedure TMainForm.ViewGuideClick(Sender: TObject; Index: Integer);
+begin
+  OpenGuide(chView.ChannelAt(Index));
+end;
+
+procedure TMainForm.MenuGuideClick(Sender: TObject);
+begin
+  OpenGuide(chView.SelectedChannel);
 end;
 
 procedure TMainForm.StepChannel(Delta: Integer);
@@ -1666,8 +1975,7 @@ end;
 procedure TMainForm.StopRecording(const Reason: string);
 begin
   if FRecPlayer = nil then Exit;
-  libvlc_media_player_stop(FRecPlayer);
-  libvlc_media_player_release(FRecPlayer);
+  ReleasePlayerAsync(FRecPlayer);
   FRecPlayer := nil;
   lblRec.Caption := '';
   if Reason <> '' then
@@ -1798,13 +2106,34 @@ begin
         SetFullscreen(False);
         Key := 0;
       end
+      else if FGuideOpen then
+      begin
+        CloseGuide;
+        Key := 0;
+      end
       else if InEdit and (edSearch.Text <> '') then
       begin
         edSearch.Text := '';
         Key := 0;
       end;
+    VK_E:
+      if (not InEdit) and (Shift = []) then
+      begin
+        if FGuideOpen then CloseGuide
+        else
+        begin
+          if FFullscreen then SetFullscreen(False);
+          OpenGuide(TargetChannel);
+        end;
+        Key := 0;
+      end;
     VK_BACK:
-      if (not InEdit) and FInCategory then
+      if (not InEdit) and FGuideOpen then
+      begin
+        CloseGuide;
+        Key := 0;
+      end
+      else if (not InEdit) and FInCategory then
       begin
         BackClick(nil);
         Key := 0;
@@ -1848,6 +2177,7 @@ end;
 
 procedure TMainForm.TabsChange(Sender: TObject);
 begin
+  CloseGuide;
   FInCategory := False;
   FSettings.LastTab := segTabs.ItemIndex;
   ApplyFilter;
@@ -2081,11 +2411,6 @@ begin
   SetFullscreen(not FFullscreen);
 end;
 
-procedure TMainForm.LogosLoaded(Sender: TObject);
-begin
-  if chView <> nil then chView.Invalidate;
-end;
-
 procedure TMainForm.InfoPaint(Sender: TObject);
 var
   C: TCanvas;
@@ -2135,6 +2460,17 @@ begin
 
   C.Font.Size := 9;
   C.Font.Style := [];
+  if FArchive then
+  begin
+    C.Font.Color := clrAccent;
+    S := 'АРХИВ   ' + FormatDateTime('dd.mm  hh:nn', UtcToLocal(FArchiveStart)) + ' - ' +
+      FormatDateTime('hh:nn', UtcToLocal(FArchiveStop)) + '   ' + FArchiveTitle;
+    C.TextOut(X, Y, Ellipsize(C, S, W - X - 16));
+    Inc(Y, C.TextHeight('Ag') + 2);
+    C.Font.Color := clrDim;
+    C.TextOut(X, Y, 'Кнопка «В эфир» внизу вернёт к прямой трансляции');
+    Exit;
+  end;
   It := nil;
   Nx := nil;
   if FCurrent.Epg <> nil then
@@ -2188,6 +2524,12 @@ var
 begin
   FNowUtc := NowUtc;
   chView.NowUtc := FNowUtc;
+  guide.NowUtc := FNowUtc;
+  if FLogos.TakeChanged then
+  begin
+    chView.Invalidate;
+    pbInfo.Invalidate;
+  end;
   if (FPlayer <> nil) and FPlaying then
   begin
     St := libvlc_media_player_get_state(FPlayer);
@@ -2199,7 +2541,7 @@ begin
         VLC_STATE_BUFFERING: S := 'Буферизация...';
         VLC_STATE_PLAYING:
           begin
-            S := '';
+            if FArchive then S := 'Запись из архива' else S := '';
             ApplyVolume;
           end;
         VLC_STATE_PAUSED:    S := 'Пауза';
@@ -2230,6 +2572,7 @@ begin
   begin
     chView.Invalidate;
     pbInfo.Invalidate;
+    if FGuideOpen then guide.Invalidate;
   end;
 end;
 
@@ -2239,6 +2582,7 @@ var
 begin
   Ch := chView.SelectedChannel;
   miPlay.Enabled := Ch <> nil;
+  miGuide.Enabled := Ch <> nil;
   miExternal.Enabled := Ch <> nil;
   miRecord.Enabled := Ch <> nil;
   miFav.Enabled := Ch <> nil;

@@ -17,7 +17,7 @@ function ShowSettings(AOwner: TComponent; S: TAppSettings; StartPage: Integer = 
 implementation
 
 uses
-  widgets;
+  widgets, catchup;
 
 type
   TSettingsForm = class(TForm)
@@ -38,6 +38,8 @@ type
     { телепрограмма }
     chkPlaylistEpg: TCheckBox;
     lbSources: TListBox;
+    sePastDays: TSpinEdit;
+    cbCatchup: TComboBox;
     procedure BrowsePlayer(Sender: TObject);
     procedure BrowseRecDir(Sender: TObject);
     procedure AddSource(Sender: TObject);
@@ -234,6 +236,8 @@ begin
   S.RecordDir := Trim(edRecDir.Text);
   if S.RecordDir = '' then S.RecordDir := DefaultRecordDir;
   S.UsePlaylistEpg := chkPlaylistEpg.Checked;
+  S.EpgPastDays := sePastDays.Value;
+  S.DefaultCatchup := cbCatchup.ItemIndex;
   S.EpgSources.Assign(lbSources.Items);
   S.Save;
   ModalResult := mrOK;
@@ -336,18 +340,38 @@ begin
 
     { ---------- Источники телепрограмм ---------- }
     P := AddPage(F, 'Источники телепрограмм');
-    F.chkPlaylistEpg := AddCheck(P, 'Брать телепрограмму, указанную в плейлисте (url-tvg)', 16, 14,
+    F.chkPlaylistEpg := AddCheck(P, 'Автоматически брать телепрограмму, указанную в плейлисте (url-tvg)', 16, 12,
       S.UsePlaylistEpg);
-    AddLabel(P, 'Свои источники (XMLTV, .xml или .xml.gz). Используются все сразу:', 16, 46);
+    AddLabel(P, 'Свои источники (XMLTV, .xml или .xml.gz). Используются все сразу:', 16, 40);
     F.lbSources := TListBox.Create(F);
     F.lbSources.Parent := P;
-    F.lbSources.SetBounds(16, 68, 450, 250);
+    F.lbSources.SetBounds(16, 60, 450, 170);
     F.lbSources.Items.Assign(S.EpgSources);
     F.lbSources.OnDblClick := @F.EditSource;
-    AddButton(P, 'Добавить...', 476, 68, 100, @F.AddSource);
-    AddButton(P, 'Изменить...', 476, 102, 100, @F.EditSource);
-    AddButton(P, 'Удалить', 476, 136, 100, @F.RemoveSource);
-    AddLabel(P, 'Телепрограмма обновляется раз в 12 часов или кнопкой «Обновить» (F5).', 16, 330);
+    AddButton(P, 'Добавить...', 476, 60, 100, @F.AddSource);
+    AddButton(P, 'Изменить...', 476, 94, 100, @F.EditSource);
+    AddButton(P, 'Удалить', 476, 128, 100, @F.RemoveSource);
+
+    AddLabel(P, 'Хранить прошедшую программу (для архива), дней:', 16, 246);
+    F.sePastDays := TSpinEdit.Create(F);
+    F.sePastDays.Parent := P;
+    F.sePastDays.SetBounds(380, 242, 70, 24);
+    F.sePastDays.MinValue := 0;
+    F.sePastDays.MaxValue := 14;
+    F.sePastDays.Value := S.EpgPastDays;
+
+    AddLabel(P, 'Тип архива, если в плейлисте он не указан:', 16, 280);
+    F.cbCatchup := TComboBox.Create(F);
+    F.cbCatchup.Parent := P;
+    F.cbCatchup.Style := csDropDownList;
+    F.cbCatchup.SetBounds(300, 276, 276, 24);
+    for i := Low(CATCHUP_TITLES) to High(CATCHUP_TITLES) do
+      F.cbCatchup.Items.Add(CATCHUP_TITLES[i]);
+    F.cbCatchup.ItemIndex := S.DefaultCatchup;
+
+    AddLabel(P, 'Телепрограмма обновляется раз в 12 часов или кнопкой «Обновить» (F5). ' +
+      'Открыть телепрограмму канала: стрелка справа от канала, правая кнопка мыши или клавиша E.',
+      16, 314, 560);
 
     { ---------- Резервная копия ---------- }
     P := AddPage(F, 'Экспорт и импорт');

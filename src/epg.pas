@@ -20,6 +20,7 @@ type
   TEpgChannel = class
   public
     Id: string;
+    Wanted: Boolean;      { канал есть в текущем плейлисте }
     Items: TFPObjectList;
     constructor Create;
     destructor Destroy; override;
@@ -31,10 +32,18 @@ type
   private
     FChannels: TStringList;   { id -> TEpgChannel (владеет объектами) }
     FNames: TStringList;      { нормализованное имя -> TEpgChannel }
+    FWantIds: TStringList;    { tvg-id каналов плейлиста }
+    FWantNames: TStringList;  { нормализованные имена каналов плейлиста }
     FProgCount: Integer;
   public
     constructor Create;
     destructor Destroy; override;
+    { Ограничить загрузку каналами плейлиста (экономит память и время). }
+    procedure AddWanted(const Id, Name1, Name2: string);
+    function Filtering: Boolean;
+    function IdWanted(const Id: string): Boolean;
+    function NameWanted(const AName: string): Boolean;
+    function FindById(const Id: string): TEpgChannel;
     function GetOrAdd(const Id: string): TEpgChannel;
     procedure AddName(const AName: string; Ch: TEpgChannel);
     procedure AddItem(const ChannelId: string; Item: TEpgItem);
@@ -43,7 +52,9 @@ type
     property ProgrammeCount: Integer read FProgCount;
   end;
 
-function LoadXmltvFile(const FileName: string; Data: TEpgData; out ErrorMsg: string): Boolean;
+{ PastDays/FutureDays — сколько дней назад (для архива) и вперёд хранить. }
+function LoadXmltvFile(const FileName: string; Data: TEpgData; PastDays, FutureDays: Double;
+  out ErrorMsg: string): Boolean;
 function NowUtc: TDateTime;
 function UtcToLocal(T: TDateTime): TDateTime;
 function NormalizeName(const S: string): string;
@@ -138,13 +149,63 @@ begin
   FNames.Sorted := True;
   FNames.CaseSensitive := True;
   FNames.Duplicates := dupIgnore;
+  FWantIds := TStringList.Create;
+  FWantIds.Sorted := True;
+  FWantIds.CaseSensitive := False;
+  FWantIds.Duplicates := dupIgnore;
+  FWantNames := TStringList.Create;
+  FWantNames.Sorted := True;
+  FWantNames.CaseSensitive := True;
+  FWantNames.Duplicates := dupIgnore;
 end;
 
 destructor TEpgData.Destroy;
 begin
+  FWantNames.Free;
+  FWantIds.Free;
   FNames.Free;
   FChannels.Free;
   inherited Destroy;
+end;
+
+procedure TEpgData.AddWanted(const Id, Name1, Name2: string);
+var
+  K: string;
+begin
+  if Trim(Id) <> '' then FWantIds.Add(Trim(Id));
+  K := NormalizeName(Name1);
+  if K <> '' then FWantNames.Add(K);
+  K := NormalizeName(Name2);
+  if K <> '' then FWantNames.Add(K);
+end;
+
+function TEpgData.Filtering: Boolean;
+begin
+  Result := (FWantIds.Count > 0) or (FWantNames.Count > 0);
+end;
+
+function TEpgData.IdWanted(const Id: string): Boolean;
+var
+  i: Integer;
+begin
+  Result := FWantIds.Find(Id, i) or FWantNames.Find(NormalizeName(Id), i);
+end;
+
+function TEpgData.NameWanted(const AName: string): Boolean;
+var
+  i: Integer;
+begin
+  Result := FWantNames.Find(NormalizeName(AName), i);
+end;
+
+function TEpgData.FindById(const Id: string): TEpgChannel;
+var
+  i: Integer;
+begin
+  if FChannels.Find(Id, i) then
+    Result := TEpgChannel(FChannels.Objects[i])
+  else
+    Result := nil;
 end;
 
 function TEpgData.GetOrAdd(const Id: string): TEpgChannel;
@@ -381,7 +442,8 @@ begin
   Result := True;
 end;
 
-function LoadXmltvFile(const FileName: string; Data: TEpgData; out ErrorMsg: string): Boolean;
+function LoadXmltvFile(const FileName: string; Data: TEpgData; PastDays, FutureDays: Double;
+  out ErrorMsg: string): Boolean;
 var
   Src: TStream;
   Sc: TXmlScanner;
@@ -394,6 +456,9 @@ var
   PTitle, PDesc: string;
   Expect: Integer;   { 1 — ждём CDATA для title, 2 — для desc }
   It: TEpgItem;
+  Filter, LastWanted: Boolean;
+  LastChan: string;
+  PC: TEpgChannel;
 begin
   Result := False;
   ErrorMsg := '';
@@ -420,8 +485,11 @@ begin
     end;
   end;
 
-  WinFrom := NowUtc - 0.5;
-  WinTo := NowUtc + 2;
+  WinFrom := NowUtc - PastDays - 0.25;
+  WinTo := NowUtc + FutureDays;
+  Filter := Data.Filtering;
+  LastChan := #0;
+  LastWanted := True;
   CurChan := nil;
   InProg := False;
   ProgOk := False;
@@ -448,7 +516,7 @@ begin
         begin
           Txt := Copy(Tag, 9, Length(Tag) - 10);
           if InProg and (Expect = 1) then PTitle := FixUtf8Tail(Copy(Trim(Txt), 1, 300))
-          else if InProg and (Expect = 2) then PDesc := FixUtf8Tail(Copy(Trim(Txt), 1, 800));
+          else if InProg and (Expect = 2) then PDesc := FixUtf8Tail(Copy(Trim(Txt), 1, 500));
           Expect := 0;
           Continue;
         end;
@@ -458,13 +526,20 @@ begin
         Name := TagName(Tag);
 
         if Name = 'channel' then
-          CurChan := Data.GetOrAdd(TagAttr(Tag, 'id'))
+        begin
+          CurChan := Data.GetOrAdd(TagAttr(Tag, 'id'));
+          if Filter and Data.IdWanted(CurChan.Id) then CurChan.Wanted := True;
+        end
         else if Name = '/channel' then
           CurChan := nil
         else if Name = 'display-name' then
         begin
           if (CurChan <> nil) and (Tag[Length(Tag)] <> '/') and Sc.ReadUntil('<', Txt, 1000) then
-            Data.AddName(DecodeEntities(FixUtf8Tail(Txt)), CurChan);
+          begin
+            Txt := DecodeEntities(FixUtf8Tail(Txt));
+            Data.AddName(Txt, CurChan);
+            if Filter and Data.NameWanted(Txt) then CurChan.Wanted := True;
+          end;
         end
         else if Name = 'programme' then
         begin
@@ -476,6 +551,16 @@ begin
                     ParseXmltvTime(TagAttr(Tag, 'stop'), PStop);
           if ProgOk then
             ProgOk := (PStop > WinFrom) and (PStart < WinTo) and (PStop > PStart);
+          if ProgOk and Filter then
+          begin
+            if ProgChan <> LastChan then
+            begin
+              LastChan := ProgChan;
+              PC := Data.FindById(ProgChan);
+              LastWanted := ((PC <> nil) and PC.Wanted) or Data.IdWanted(ProgChan);
+            end;
+            ProgOk := LastWanted;
+          end;
         end
         else if Name = '/programme' then
         begin
@@ -500,7 +585,7 @@ begin
         end
         else if InProg and ProgOk and (Name = 'desc') and (PDesc = '') and (Tag[Length(Tag)] <> '/') then
         begin
-          if Sc.ReadUntil('<', Txt, 800) then
+          if Sc.ReadUntil('<', Txt, 500) then
           begin
             PDesc := DecodeEntities(FixUtf8Tail(Trim(Txt)));
             if PDesc = '' then Expect := 2;
