@@ -63,6 +63,8 @@ type
     { запись }
     RecordDir: string;
     DownloadDir: string;         { папка для скачанных фильмов }
+    DownloadQuality: Integer;    { 0 — 480p, 1 — 720p, 2 — 1080p, 3 — лучшее }
+    CompatVideo: Boolean;        { совместимый видеовывод (виртуальные машины, старые видеокарты) }
     { телепрограмма }
     UsePlaylistEpg: Boolean;
     EpgPastDays: Integer;        { сколько дней прошедшей программы хранить (архив) }
@@ -108,6 +110,9 @@ type
 function HashStr(const S: string): string;
 function DefaultRecordDir: string;
 function DefaultDownloadDir: string;
+function DownloadMaxHeight(Quality: Integer): Integer;
+{ Программа запущена в VirtualBox, VMware, QEMU и т. п. (только Linux; в Windows — False). }
+function IsVirtualMachine: Boolean;
 
 implementation
 
@@ -179,6 +184,43 @@ begin
     Result := Result + 'IPTV Aristocrat Загрузки';
 end;
 
+function DownloadMaxHeight(Quality: Integer): Integer;
+begin
+  case Quality of
+    0: Result := 480;
+    2: Result := 1080;
+    3: Result := 0;
+  else
+    Result := 720;
+  end;
+end;
+
+function IsVirtualMachine: Boolean;
+{$IFDEF LINUX}
+var
+  L: TStringList;
+  S: string;
+{$ENDIF}
+begin
+  Result := False;
+{$IFDEF LINUX}
+  if not FileExists('/sys/class/dmi/id/product_name') then Exit;
+  L := TStringList.Create;
+  try
+    try
+      L.LoadFromFile('/sys/class/dmi/id/product_name');
+      S := LowerCase(L.Text);
+      Result := (Pos('virtualbox', S) > 0) or (Pos('vmware', S) > 0) or (Pos('qemu', S) > 0) or
+        (Pos('kvm', S) > 0) or (Pos('virtual machine', S) > 0) or (Pos('bochs', S) > 0);
+    except
+      Result := False;
+    end;
+  finally
+    L.Free;
+  end;
+{$ENDIF}
+end;
+
 constructor TAppSettings.Create;
 begin
   inherited Create;
@@ -213,6 +255,8 @@ begin
   NetworkCaching := 1000;
   RecordDir := DefaultRecordDir;
   DownloadDir := DefaultDownloadDir;
+  DownloadQuality := 1;
+  CompatVideo := IsVirtualMachine;
   UsePlaylistEpg := True;
   EpgPastDays := 7;
   DefaultCatchup := 0;
@@ -288,6 +332,9 @@ begin
 
   RecordDir := Ini.ReadString('Record', 'Folder', RecordDir);
   DownloadDir := Ini.ReadString('Record', 'DownloadFolder', DownloadDir);
+  DownloadQuality := Ini.ReadInteger('Record', 'DownloadQuality', DownloadQuality);
+  if (DownloadQuality < 0) or (DownloadQuality > 3) then DownloadQuality := 1;
+  CompatVideo := Ini.ReadBool('Player', 'CompatVideo', CompatVideo);
   UsePlaylistEpg := Ini.ReadBool('Epg', 'UsePlaylistEpg', UsePlaylistEpg);
   EpgPastDays := Ini.ReadInteger('Epg', 'PastDays', EpgPastDays);
   DefaultCatchup := Ini.ReadInteger('Epg', 'DefaultCatchup', DefaultCatchup);
@@ -368,6 +415,8 @@ begin
 
   Ini.WriteString('Record', 'Folder', RecordDir);
   Ini.WriteString('Record', 'DownloadFolder', DownloadDir);
+  Ini.WriteInteger('Record', 'DownloadQuality', DownloadQuality);
+  Ini.WriteBool('Player', 'CompatVideo', CompatVideo);
   Ini.WriteBool('Epg', 'UsePlaylistEpg', UsePlaylistEpg);
   Ini.WriteInteger('Epg', 'PastDays', EpgPastDays);
   Ini.WriteInteger('Epg', 'DefaultCatchup', DefaultCatchup);

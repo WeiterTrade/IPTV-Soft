@@ -21,6 +21,7 @@ type
     State: TDlState;
     Done, Total: Int64;
     Parts, PartsDone: Integer;   { для фильмов из частей (HLS) }
+    MaxHeight: Integer;          { наибольшая высота кадра для HLS (0 — лучшее качество) }
     Error: string;
     Cancelled: Boolean;
     Thread: TThread;
@@ -44,6 +45,7 @@ type
     FIndexFile: string;
   public
     MaxParallel: Integer;
+    MaxHeight: Integer;   { качество скачивания HLS: 480, 720, 1080 или 0 — лучшее }
     constructor Create(const AIndexFile: string);
     destructor Destroy; override;
     { ставит фильм в очередь; Dir — папка загрузок }
@@ -503,7 +505,10 @@ procedure TDownloadThread.DownloadHls(const AUrl, AText: string);
 var
   Pl, Segs: TStringList;
   Base, Txt, Line, Best, Tmp, Part, Err, InitUrl, Key: string;
-  BestBw, Bw, i, j, Depth, Tries: Integer;
+  i, j, Depth, Tries, Hgt: Integer;
+  Bw, Score, BestScore, LowScore: Int64;
+  Res, LowUrl: string;
+  Fits: Boolean;
   F, S: TFileStream;
   Got: Boolean;
 begin
@@ -526,24 +531,45 @@ begin
         end;
       Pl.Text := Txt;
       if Pos('#EXT-X-STREAM-INF', UpperCase(Txt)) = 0 then Break;
+      { выбираем качество: лучшее, но не выше заданного (по умолчанию 720p);
+        если все варианты выше — самый лёгкий }
       Best := '';
-      BestBw := -1;
+      BestScore := -1;
+      LowUrl := '';
+      LowScore := High(Int64);
       for i := 0 to Pl.Count - 1 do
         if Pos('#EXT-X-STREAM-INF', UpperCase(Pl[i])) = 1 then
         begin
-          Bw := StrToIntDef(AttrValue(Pl[i], 'BANDWIDTH'), 0);
+          Bw := StrToInt64Def(AttrValue(Pl[i], 'BANDWIDTH'), 0);
+          Res := AttrValue(Pl[i], 'RESOLUTION');
+          Hgt := 0;
+          if Pos('x', LowerCase(Res)) > 0 then
+            Hgt := StrToIntDef(Copy(Res, Pos('x', LowerCase(Res)) + 1, 6), 0);
           for j := i + 1 to Pl.Count - 1 do
           begin
             Line := Trim(Pl[j]);
             if (Line = '') or (Line[1] = '#') then Continue;
-            if Bw >= BestBw then
+            Score := Int64(Hgt) * 100000000 + Bw;
+            if Item.MaxHeight <= 0 then
+              Fits := True
+            else if Hgt > 0 then
+              Fits := Hgt <= Item.MaxHeight
+            else
+              Fits := Bw <= Int64(Item.MaxHeight) * 5000;   { 720p ≈ до 3,6 Мбит/с }
+            if Fits and (Score >= BestScore) then
             begin
-              BestBw := Bw;
+              BestScore := Score;
               Best := ResolveUrl(Base, Line);
+            end;
+            if Score < LowScore then
+            begin
+              LowScore := Score;
+              LowUrl := ResolveUrl(Base, Line);
             end;
             Break;
           end;
         end;
+      if Best = '' then Best := LowUrl;
       if Best = '' then
       begin
         ErrMsg := 'в списке нет ни одного варианта качества';
@@ -666,6 +692,7 @@ begin
   FItems := TFPObjectList.Create(True);
   FIndexFile := AIndexFile;
   MaxParallel := 2;
+  MaxHeight := 720;
 end;
 
 destructor TDownloadManager.Destroy;
@@ -708,6 +735,7 @@ begin
   Result.Poster := APoster;
   Result.FileName := Path;
   Result.State := dsQueued;
+  Result.MaxHeight := MaxHeight;
   FItems.Add(Result);
   SaveMediaInfo(FIndexFile, Path, ATitle, APoster);
 end;

@@ -1426,7 +1426,8 @@ end;
 
 procedure TMainForm.InitVlc;
 var
-  Args: array[0..2] of PAnsiChar;
+  Args: array[0..5] of PAnsiChar;
+  N: Integer;
 begin
   if FindCmdLineSwitch('novideo', ['-', '/'], True) then
   begin
@@ -1445,7 +1446,19 @@ begin
   Args[0] := '--no-video-title-show';
   Args[1] := '--network-caching=1000';
   Args[2] := '--quiet';
-  FVlc := libvlc_new(3, @Args[0]);
+  N := 3;
+  if FSettings.CompatVideo then
+  begin
+    { без аппаратного ускорения; в Linux — простой вывод X11 (работает в VirtualBox) }
+    Args[N] := '--avcodec-hw=none';
+    Inc(N);
+    {$IFDEF LINUX}
+    Args[N] := '--vout=xcb_x11';
+    Inc(N);
+    {$ENDIF}
+    Log('совместимый вывод видео включён');
+  end;
+  FVlc := libvlc_new(N, @Args[0]);
   if FVlc = nil then
   begin
     FVlcError := 'Не удалось запустить видеодвижок VLC ' + VlcVersion;
@@ -5054,6 +5067,7 @@ begin
     Exit;
   end;
   ForceDirectories(FSettings.DownloadDir);
+  FDownloads.MaxHeight := DownloadMaxHeight(FSettings.DownloadQuality);
   It := FDownloads.Add(M.Title, Src.URL, M.Poster, FSettings.DownloadDir);
   FDownloads.Poll;
   SetInfo('Фильм «' + M.Title + '» скачивается — смотрите раздел «Скачанные»');
@@ -5119,6 +5133,7 @@ begin
   if (Ch = nil) or not (Ch.Data is TDownloadItem) then Exit;
   It := TDownloadItem(Ch.Data);
   It.State := dsCancelled;
+  FDownloads.MaxHeight := DownloadMaxHeight(FSettings.DownloadQuality);
   FDownloads.Add(It.Title, It.Url, It.Poster, FSettings.DownloadDir);
   FDownloads.Poll;
   ApplyFilter;

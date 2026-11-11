@@ -33,7 +33,8 @@ type
     segAccent, segView: TSegmentBar;
     tgNumbers, tgLogos, tgMaximized, tgSystemFrame, tgAutoPlay: TToggle;
     { плеер }
-    segPlayer: TSegmentBar;
+    segPlayer, segDlQuality: TSegmentBar;
+    tgCompatVideo: TToggle;
     edExtPath, edExtArgs: TEdit;
     seCaching: TSpinEdit;
     { запись }
@@ -342,6 +343,10 @@ begin
   seCaching := AddSpin(P, X0, Y + 28, 100, 60000, 250);
   AddLabel(P, 'Меньше — каналы включаются быстрее. Больше — меньше рывков на медленном интернете. ' +
     'Рекомендуется 1000.', X0 + 130, Y + 26, COL_W - 130, True);
+  Inc(Y, 80);
+  tgCompatVideo := AddToggle(P, 'Совместимый вывод видео (для виртуальных машин и старых видеокарт)', X0, Y);
+  AddLabel(P, 'Включите, если звук есть, а изображения нет (например, в VirtualBox). ' +
+    'Изменение действует после перезапуска программы.', X0, Y + 34, COL_W, True).Height := 40;
 
   { ---------- Запись ---------- }
   P := NewPage(SEC_RECORD, 'Запись эфира', ikRecord);
@@ -360,6 +365,10 @@ begin
   AddButton(P, 'Выбрать...', X0 + COL_W - 250, Y + 27, 120, @BrowseDlDir);
   AddButton(P, 'Открыть', X0 + COL_W - 120, Y + 27, 120, @OpenDlDir);
   Inc(Y, 80);
+  AddLabel(P, 'Качество скачиваемых фильмов (если провайдер даёт выбор)', X0, Y, 0, False, True);
+  segDlQuality := AddSegments(P, X0, Y + 28, 440, ['480p', '720p', '1080p', 'Лучшее']);
+  AddLabel(P, 'Фильм 720p обычно весит 1–2,5 ГБ, 1080p — 3–6 ГБ.', X0, Y + 72, COL_W, True);
+  Inc(Y, 110);
   AddLabel(P, 'Фильм скачивается кнопкой «Скачать» на странице фильма. Скачанные фильмы и записи эфира ' +
     'видны в разделах «Скачанные» и «Записи» на панели слева.', X0, Y, COL_W, True).Height := 50;
 
@@ -461,6 +470,8 @@ begin
   seCaching.Value := FS.NetworkCaching;
   edRecDir.Text := FS.RecordDir;
   edDlDir.Text := FS.DownloadDir;
+  segDlQuality.ItemIndex := FS.DownloadQuality;
+  tgCompatVideo.Checked := FS.CompatVideo;
   tgPlaylistEpg.Checked := FS.UsePlaylistEpg;
   lbSources.Items.Assign(FS.EpgSources);
   sePastDays.Value := FS.EpgPastDays;
@@ -487,6 +498,8 @@ begin
   if FS.RecordDir = '' then FS.RecordDir := DefaultRecordDir;
   FS.DownloadDir := Trim(edDlDir.Text);
   if FS.DownloadDir = '' then FS.DownloadDir := DefaultDownloadDir;
+  if segDlQuality.ItemIndex >= 0 then FS.DownloadQuality := segDlQuality.ItemIndex;
+  FS.CompatVideo := tgCompatVideo.Checked;
   FS.UsePlaylistEpg := tgPlaylistEpg.Checked;
   FS.EpgSources.Assign(lbSources.Items);
   FS.EpgPastDays := sePastDays.Value;
