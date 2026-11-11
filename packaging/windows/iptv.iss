@@ -32,13 +32,14 @@ Name: "ru"; MessagesFile: "compiler:Languages\Russian.isl"
 Name: "en"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
+Name: "startmenuicon"; Description: "Добавить ярлык в меню «Пуск»"; GroupDescription: "Ярлыки:"
 Name: "desktopicon"; Description: "Создать ярлык на рабочем столе"; GroupDescription: "Ярлыки:"
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\IPTV"; Filename: "{app}\IPTV.exe"
+Name: "{autoprograms}\IPTV"; Filename: "{app}\IPTV.exe"; Tasks: startmenuicon
 Name: "{autodesktop}\IPTV"; Filename: "{app}\IPTV.exe"; Tasks: desktopicon
 
 [Run]
