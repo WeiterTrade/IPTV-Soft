@@ -9,7 +9,7 @@
 
 | Система | Что скачивать |
 |---|---|
-| Windows XP, Vista | `IPTV-Aristocrat-…-windows-xp.zip` |
+| Windows XP, Vista | `IPTV-Aristocrat-…-windows-xp-setup.exe` (установщик) или `…-windows-xp.zip` |
 | Windows 7, 8, 10, 11 | `IPTV-Aristocrat-…-windows-setup.exe` (установщик) или `…-windows-win7plus.zip` |
 | Ubuntu, Debian, Mint | `iptv-aristocrat_…_amd64.deb` |
 | Fedora, openSUSE и др. | `iptv-aristocrat-…x86_64.rpm` |
