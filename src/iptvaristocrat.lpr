@@ -15,7 +15,16 @@ uses
 
 {$R *.res}
 
+{$IFDEF WINDOWS}
+{ Не показывать системные окна «Точка входа не найдена» при загрузке модулей VLC:
+  модуль, несовместимый с этой версией Windows, просто пропускается. }
+function SetErrorMode(uMode: LongWord): LongWord; stdcall; external 'kernel32.dll';
+{$ENDIF}
+
 begin
+  {$IFDEF WINDOWS}
+  SetErrorMode($0001 or $0002 or $8000);  { FAILCRITICALERRORS, NOGPFAULTERRORBOX, NOOPENFILEERRORBOX }
+  {$ENDIF}
   MaskFloatExceptions;
   Log('---- запуск ' + ParamStr(0));
   try
