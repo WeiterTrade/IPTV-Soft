@@ -85,6 +85,15 @@ jobs:
           rm -rf "$D/plugins/gui" "$D/plugins/visualization" "$D/plugins/video_splitter"
           # кэш модулей VLC пересоздаём: без него VLC при каждом запуске перебирает все модули
           rm -f "$D/plugins/plugins.dat"
+          # Windows XP: убираем модули VLC, которым нужны функции новее XP (например, strtok_s)
+          if [ "${{ matrix.flavor }}" = "xp" ]; then
+            for f in $(grep -l -a -r -E "strtok_s|InitializeConditionVariable|GetTickCount64|InitOnceExecuteOnce" "$D/plugins" --include="*.dll" || true); do
+              echo "не для XP, удаляю: $f"; rm -f "$f"
+            done
+            for f in "$D"/*.dll; do
+              if grep -q -a -E "strtok_s|GetTickCount64|InitializeConditionVariable" "$f"; then echo "ВНИМАНИЕ: $f требует функции новее XP"; fi
+            done
+          fi
           if [ -f "$V/vlc-cache-gen.exe" ]; then "$V/vlc-cache-gen.exe" "$D/plugins" || true; fi
           ls -la "$D/plugins/plugins.dat" || echo "plugins.dat не создан"
           cp LICENSE "$D/LICENSE.txt"
