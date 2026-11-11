@@ -92,8 +92,8 @@ jobs:
             "$VERSION" "${{ matrix.title }}" > "$D/README.txt"
           cd dist && 7z a -tzip "../IPTV-Aristocrat-${VERSION}-windows-${{ matrix.flavor }}.zip" "IPTV" > /dev/null
 
-      # установщик с ярлыками «IPTV» (Inno Setup 6 работает с Windows 7 и новее)
-      - name: Установщик
+      # установщик с ярлыками «IPTV» (Inno Setup 6 — для Windows 7 и новее)
+      - name: Установщик (Windows 7+)
         if: matrix.flavor == 'win7plus'
         shell: pwsh
         run: |
@@ -102,6 +102,31 @@ jobs:
           if (-not (Test-Path $iscc)) { throw "Inno Setup не найден" }
           New-Item -ItemType Directory -Force out | Out-Null
           & $iscc "/DAppVersion=$env:VERSION" packaging\windows\iptv.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item out\*.exe .
+
+      # для XP — Inno Setup 5.6.1: его установщики запускаются на Windows XP
+      - name: Кэш Inno Setup 5
+        if: matrix.flavor == 'xp'
+        uses: actions/cache@v4
+        with:
+          path: is5-installer
+          key: innosetup-5.6.1-unicode
+
+      - name: Установщик (Windows XP / Vista)
+        if: matrix.flavor == 'xp'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force is5-installer | Out-Null
+          $exe = "is5-installer\innosetup-5.6.1-unicode.exe"
+          if (-not (Test-Path $exe)) {
+            curl.exe -L --fail --retry 5 --retry-delay 10 -o $exe "https://files.jrsoftware.org/is/5/innosetup-5.6.1-unicode.exe"
+          }
+          Start-Process -FilePath $exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/DIR=C:\is5' -Wait
+          $iscc = "C:\is5\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "Inno Setup 5 не установился" }
+          New-Item -ItemType Directory -Force out | Out-Null
+          & $iscc "/DAppVersion=$env:VERSION" packaging\windows\iptv-xp.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item out\*.exe .
 
