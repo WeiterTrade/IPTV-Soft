@@ -1,4 +1,4 @@
-; Установщик IPTV Aristocrat для Windows XP / Vista (Inno Setup 5.6 — последняя
+﻿; Установщик IPTV Aristocrat для Windows XP / Vista (Inno Setup 5.6 — последняя
 ; версия, установщики которой запускаются на XP).
 ; Внутри программа называется «IPTV Aristocrat», а ярлыки — просто «IPTV».
 #ifndef AppVersion

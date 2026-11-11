@@ -1,4 +1,4 @@
-; Установщик IPTV Aristocrat для Windows 7 и новее (Inno Setup 6).
+﻿; Установщик IPTV Aristocrat для Windows 7 и новее (Inno Setup 6).
 ; Внутри программа называется «IPTV Aristocrat», а ярлыки — просто «IPTV».
 #ifndef AppVersion
   #define AppVersion "1.0.0"
