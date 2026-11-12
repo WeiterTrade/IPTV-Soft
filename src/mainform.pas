@@ -2523,8 +2523,23 @@ end;
 
 { Новый проигрыватель создаётся для каждого канала, а старый останавливается
   и освобождается в фоновом потоке — окно не замирает при переключении. }
+{ Ссылка на обычный видеофайл (не поток): .mp4, .mkv, .avi и т. п. }
+function IsDirectVideoUrl(const Url: string): Boolean;
+var
+  U: string;
+  p: Integer;
+begin
+  U := LowerCase(Url);
+  p := Pos('?', U);
+  if p > 0 then U := Copy(U, 1, p - 1);
+  Result := (Pos('.mp4', U) > 0) or (Pos('.mkv', U) > 0) or (Pos('.avi', U) > 0) or
+    (Pos('.m4v', U) > 0) or (Pos('.mov', U) > 0) or (Pos('.wmv', U) > 0) or (Pos('.webm', U) > 0);
+end;
+
 function TMainForm.StartMedia(Ch: TChannel; const Url: string): Boolean;
 var
+  XpFile: Boolean;
+  PlayUrl: string;
   M, Old: Pointer;
   SL: TStringList;
   i, NewSlot: Integer;
@@ -2537,17 +2552,33 @@ begin
       'Можно включить внешний плеер в Настройках → Плеер.');
     Exit;
   end;
-  if Pos('://', Url) > 0 then
-    M := libvlc_media_new_location(FVlc, PAnsiChar(Url))
+  XpFile := HttpsUnsupported and (Ch.IsVod or IsDirectVideoUrl(Url));
+  { Windows XP: файлы фильмов по https:// открываем по http:// (старый TLS в XP) }
+  if XpFile then PlayUrl := FixUrlForSystem(Url) else PlayUrl := Url;
+  if Pos('://', PlayUrl) > 0 then
+    M := libvlc_media_new_location(FVlc, PAnsiChar(PlayUrl))
   else
-    M := libvlc_media_new_path(FVlc, PAnsiChar(Url));
+    M := libvlc_media_new_path(FVlc, PAnsiChar(PlayUrl));
   if M = nil then
   begin
     FPlayerStatus := 'Неверная ссылка на поток';
     UpdateStatusLabel;
     Exit;
   end;
-  libvlc_media_add_option(M, PAnsiChar(':network-caching=' + IntToStr(FSettings.NetworkCaching)));
+  if XpFile then
+  begin
+    { Windows XP, фильм-файл (MP4/MKV): больший буфер — файл подгружается кусками
+      с перемоткой по сети; упрощённое декодирование H.264 — слабому
+      процессору XP так легче (качество почти не меняется) }
+    libvlc_media_add_option(M, PAnsiChar(':network-caching=' + IntToStr(Math.Max(FSettings.NetworkCaching, 5000))));
+    libvlc_media_add_option(M, ':file-caching=3000');
+    libvlc_media_add_option(M, ':avcodec-skiploopfilter=4');
+    libvlc_media_add_option(M, ':avcodec-fast');
+    libvlc_media_add_option(M, ':avcodec-threads=0');
+    libvlc_media_add_option(M, ':http-reconnect');
+  end
+  else
+    libvlc_media_add_option(M, PAnsiChar(':network-caching=' + IntToStr(FSettings.NetworkCaching)));
   if Ch.Options <> '' then
   begin
     SL := TStringList.Create;
