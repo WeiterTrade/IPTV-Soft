@@ -213,8 +213,11 @@ var
 begin
   Result := False;
 {$IFDEF WINDOWS}
+  { в Windows 7–11 видео работает обычным способом — совместимый режим сам
+    включается только на Windows XP / Vista в виртуальной машине }
+  if Win32MajorVersion >= 6 then Exit;
   { драйверы VirtualBox / VMware }
-  D := IncludeTrailingPathDelimiter(GetEnvironmentVariable('SystemRoot')) + 'System32\drivers\';
+  D := IncludeTrailingPathDelimiter(SysUtils.GetEnvironmentVariable('SystemRoot')) + 'System32\drivers\';
   for i := 0 to High(VM_DRIVERS) do
     if FileExists(D + VM_DRIVERS[i]) then Exit(True);
   { название «компьютера» в BIOS (Windows Vista и новее) }
