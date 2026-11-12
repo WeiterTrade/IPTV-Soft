@@ -47,6 +47,9 @@ var
   { формат кадра (могут отсутствовать в очень старых версиях — тогда nil) }
   libvlc_video_set_aspect_ratio: procedure(mp: Pointer; aspect: PAnsiChar); cdecl;
   libvlc_video_set_crop_geometry: procedure(mp: Pointer; geometry: PAnsiChar); cdecl;
+  { вывод кадров в память (программный показ видео) }
+  libvlc_video_set_callbacks: procedure(mp, lock, unlock, display, opaque: Pointer); cdecl;
+  libvlc_video_set_format_callbacks: procedure(mp, setup, cleanup: Pointer); cdecl;
 
 { AppDir — папка программы (с завершающим разделителем). }
 function LoadVlc(const AppDir: string; out ErrorMsg: string): Boolean;
@@ -141,6 +144,8 @@ begin
     Pointer(libvlc_media_player_set_pause) := Need('libvlc_media_player_set_pause');
     Pointer(libvlc_video_set_aspect_ratio) := GetProcedureAddress(VlcLib, 'libvlc_video_set_aspect_ratio');
     Pointer(libvlc_video_set_crop_geometry) := GetProcedureAddress(VlcLib, 'libvlc_video_set_crop_geometry');
+    Pointer(libvlc_video_set_callbacks) := GetProcedureAddress(VlcLib, 'libvlc_video_set_callbacks');
+    Pointer(libvlc_video_set_format_callbacks) := GetProcedureAddress(VlcLib, 'libvlc_video_set_format_callbacks');
     Result := True;
   except
     on E: Exception do

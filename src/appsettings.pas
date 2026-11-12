@@ -117,7 +117,7 @@ function IsVirtualMachine: Boolean;
 implementation
 
 uses
-  Forms;
+  Forms, netload{$IFDEF WINDOWS}, Registry, Windows{$ENDIF};
 
 constructor TPlaylistEntry.Create;
 begin
@@ -201,8 +201,40 @@ var
   L: TStringList;
   S: string;
 {$ENDIF}
+{$IFDEF WINDOWS}
+const
+  VM_DRIVERS: array[0..6] of string = ('VBoxGuest.sys', 'VBoxMouse.sys', 'VBoxVideo.sys',
+    'VBoxWddm.sys', 'vmmouse.sys', 'vmhgfs.sys', 'vm3dmp.sys');
+var
+  D, S: string;
+  i: Integer;
+  R: TRegistry;
+{$ENDIF}
 begin
   Result := False;
+{$IFDEF WINDOWS}
+  { драйверы VirtualBox / VMware }
+  D := IncludeTrailingPathDelimiter(GetEnvironmentVariable('SystemRoot')) + 'System32\drivers\';
+  for i := 0 to High(VM_DRIVERS) do
+    if FileExists(D + VM_DRIVERS[i]) then Exit(True);
+  { название «компьютера» в BIOS (Windows Vista и новее) }
+  R := TRegistry.Create(KEY_READ);
+  try
+    try
+      R.RootKey := HKEY_LOCAL_MACHINE;
+      if R.OpenKeyReadOnly('HARDWARE\DESCRIPTION\System\BIOS') then
+      begin
+        S := LowerCase(R.ReadString('SystemProductName') + ' ' + R.ReadString('SystemManufacturer'));
+        Result := (Pos('virtualbox', S) > 0) or (Pos('vmware', S) > 0) or (Pos('qemu', S) > 0) or
+          (Pos('virtual machine', S) > 0) or (Pos('innotek', S) > 0);
+      end;
+    except
+      Result := False;
+    end;
+  finally
+    R.Free;
+  end;
+{$ENDIF}
 {$IFDEF LINUX}
   if not FileExists('/sys/class/dmi/id/product_name') then Exit;
   L := TStringList.Create;
@@ -334,7 +366,7 @@ begin
   DownloadDir := Ini.ReadString('Record', 'DownloadFolder', DownloadDir);
   DownloadQuality := Ini.ReadInteger('Record', 'DownloadQuality', DownloadQuality);
   if (DownloadQuality < 0) or (DownloadQuality > 3) then DownloadQuality := 1;
-  CompatVideo := Ini.ReadBool('Player', 'CompatVideo', CompatVideo);
+  CompatVideo := Ini.ReadBool('Player', 'SafeVideo', CompatVideo);
   UsePlaylistEpg := Ini.ReadBool('Epg', 'UsePlaylistEpg', UsePlaylistEpg);
   EpgPastDays := Ini.ReadInteger('Epg', 'PastDays', EpgPastDays);
   DefaultCatchup := Ini.ReadInteger('Epg', 'DefaultCatchup', DefaultCatchup);
@@ -367,6 +399,17 @@ begin
   ParentPin := Ini.ReadString('Parental', 'Pin', '');
   ReadList(Ini, 'ParentalLocks', FLocks);
   ReadList(Ini, 'EpgSources', FEpgSources);
+  { Windows XP: сохранённые ссылки https:// переводим на http:// }
+  if HttpsUnsupported then
+  begin
+    for i := 0 to FPlaylists.Count - 1 do
+    begin
+      Playlist(i).Source := FixUrlForSystem(Playlist(i).Source);
+      Playlist(i).Epg := FixUrlForSystem(Playlist(i).Epg);
+    end;
+    for i := 0 to FEpgSources.Count - 1 do
+      FEpgSources[i] := FixUrlForSystem(FEpgSources[i]);
+  end;
   ReadList(Ini, 'Favorites', FFavorites);
   ReadList(Ini, 'Recent', FRecent);
 
@@ -416,7 +459,7 @@ begin
   Ini.WriteString('Record', 'Folder', RecordDir);
   Ini.WriteString('Record', 'DownloadFolder', DownloadDir);
   Ini.WriteInteger('Record', 'DownloadQuality', DownloadQuality);
-  Ini.WriteBool('Player', 'CompatVideo', CompatVideo);
+  Ini.WriteBool('Player', 'SafeVideo', CompatVideo);
   Ini.WriteBool('Epg', 'UsePlaylistEpg', UsePlaylistEpg);
   Ini.WriteInteger('Epg', 'PastDays', EpgPastDays);
   Ini.WriteInteger('Epg', 'DefaultCatchup', DefaultCatchup);
@@ -503,7 +546,7 @@ begin
   Result := False;
   ErrorMsg := '';
   try
-    if FileExists(FileName) then DeleteFile(FileName);
+    if FileExists(FileName) then SysUtils.DeleteFile(FileName);
     Ini := TIniFile.Create(FileName);
     try
       Ini.CacheUpdates := True;

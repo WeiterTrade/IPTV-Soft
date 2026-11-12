@@ -9,7 +9,7 @@ uses
   Classes, LCLIntf, SysUtils, Types, Forms, Controls, Graphics, StdCtrls, ExtCtrls,
   Menus, Dialogs, LCLType, Clipbrd, Math, LazUTF8, FileUtil, Process,
   m3u, epg, vlcdyn, netload, appsettings, widgets, videohost,
-  channelview, logos, winframe, settingspage, applog, guideview, catchup, logodb, movies, movieview, darkdlg, moviepage, movieinfo, applogo, downloads, contnrs, darkmenu;
+  channelview, logos, winframe, settingspage, applog, guideview, catchup, logodb, movies, movieview, darkdlg, moviepage, movieinfo, applogo, downloads, contnrs, darkmenu, softvideo;
 
 type
   TLoadKind = (lkPlaylist, lkEpg);
@@ -109,6 +109,7 @@ type
     btnRailTv, btnRailMovies, btnRailHistory, btnRailSettings, btnRailRecords, btnRailDownloads: TFlatButton;
     { записи и скачанные фильмы }
     FDownloads: TDownloadManager;
+    FSoft: array[0..3] of TSoftRenderer;   { программный вывод видео по областям }
     FLocalAll: TFPObjectList; { все созданные элементы (владелец; живут до закрытия) }
     pmLocal: TPopupMenu;
     miLPlay, miLFolder, miLDelete, miLCancel, miLRetry: TMenuItem;
@@ -1452,10 +1453,18 @@ begin
     { без аппаратного ускорения; в Linux — простой вывод X11 (работает в VirtualBox) }
     Args[N] := '--avcodec-hw=none';
     Inc(N);
-    {$IFDEF LINUX}
-    Args[N] := '--vout=xcb_x11';
-    Inc(N);
-    {$ENDIF}
+    { если вывод кадров в память недоступен — простые способы вывода видео }
+    if not SoftVideoAvailable then
+    begin
+      {$IFDEF LINUX}
+      Args[N] := '--vout=xcb_x11,any';
+      Inc(N);
+      {$ENDIF}
+      {$IFDEF WINDOWS}
+      Args[N] := '--vout=directdraw,wingdi,any';
+      Inc(N);
+      {$ENDIF}
+    end;
     Log('совместимый вывод видео включён');
   end;
   FVlc := libvlc_new(N, @Args[0]);
@@ -1921,6 +1930,8 @@ var
 begin
   if (Mode < 0) or (Mode > High(ASPECT_NAMES)) then Mode := 0;
   FAspect := Mode;
+  SoftAspect := Mode;
+  if (FSlot >= 0) and (FSoft[FSlot] <> nil) then FSoft[FSlot].Box.Invalidate;
   btnAspect.Caption := ASPECT_SHORT[Mode];
   btnAspect.Checked := Mode <> 0;
   btnAspect.Invalidate;
@@ -2580,7 +2591,14 @@ begin
   FSlots[FSlot].BringToFront;
   for i := 0 to VIDEO_SLOTS - 1 do
     if i <> FSlot then FSlots[i].Visible := False;
-  AttachVideoTo(FPlayer, FSlots[FSlot]);
+  if FSettings.CompatVideo and SoftVideoAvailable then
+  begin
+    { совместимый режим: кадры рисует сама программа (без ускорения видеокарты) }
+    if FSoft[FSlot] = nil then FSoft[FSlot] := TSoftRenderer.Create(FSlots[FSlot], @VideoDblClick);
+    FSoft[FSlot].Attach(FPlayer);
+  end
+  else
+    AttachVideoTo(FPlayer, FSlots[FSlot]);
   libvlc_media_player_set_media(FPlayer, M);
   libvlc_media_release(M);
   libvlc_media_player_play(FPlayer);
@@ -3459,6 +3477,8 @@ begin
   S := P.Source;
   E := P.Epg;
   if not DarkEditPlaylist('Изменить плейлист', P.Kind, N, S, E) then Exit;
+  S := FixUrlForSystem(S);
+  E := FixUrlForSystem(E);
   P.Name := N;
   P.Source := S;
   P.Epg := E;
@@ -4255,6 +4275,8 @@ begin
   E := '';
   if AKind = 1 then T := 'Добавить медиатеку' else T := 'Добавить плейлист ТВ-каналов';
   if not DarkEditPlaylist(T, AKind, N, S, E) then Exit;
+  S := FixUrlForSystem(S);
+  E := FixUrlForSystem(E);
   Idx := FSettings.AddPlaylist(N, S, E, AKind);
   if AKind = 1 then FSettings.LastMediaPlaylist := Idx else FSettings.LastPlaylist := Idx;
   FSettings.Save;

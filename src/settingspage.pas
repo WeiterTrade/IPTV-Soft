@@ -83,7 +83,7 @@ type
 implementation
 
 uses
-  LCLIntf, catchup, darkdlg;
+  LCLIntf, catchup, darkdlg, netload;
 
 const
   X0 = 40;        { левый отступ содержимого }
@@ -589,7 +589,7 @@ procedure TSettingsPage.AddSource(Sender: TObject);
 var
   V: string;
 begin
-  V := Trim(edNewSource.Text);
+  V := FixUrlForSystem(edNewSource.Text);
   if V = '' then
   begin
     if edNewSource.CanFocus then edNewSource.SetFocus;

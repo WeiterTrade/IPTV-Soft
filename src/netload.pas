@@ -13,16 +13,41 @@ function FetchToFile(const Source, DestFile: string; out ErrorMsg: string): Bool
 { То же, но со своим заголовком User-Agent (например, «как браузер» для картинок). }
 function FetchToFileUA(const Source, DestFile, UA: string; out ErrorMsg: string): Boolean;
 
+{ True — система не умеет современный HTTPS (Windows XP): ссылки https:// заменяются на http://. }
+function HttpsUnsupported: Boolean;
+{ На Windows XP превращает https:// в http://; на остальных системах ссылку не меняет. }
+function FixUrlForSystem(const Url: string): string;
+
 const
   BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
 
 implementation
 
 uses
-  SysUtils, Classes{$IFDEF WINDOWS}, Windows{$ELSE}, Process{$ENDIF};
+  SysUtils, Classes{$IFDEF WINDOWS}, Windows, Registry{$ELSE}, Process{$ENDIF};
 
 const
   USER_AGENT = 'IPTV-Aristocrat/1.0';
+
+function HttpsUnsupported: Boolean;
+begin
+{$IFDEF WINDOWS}
+  Result := Win32MajorVersion < 6;   { 5.x — Windows 2000 / XP / Server 2003 }
+{$ELSE}
+  Result := False;
+{$ENDIF}
+end;
+
+function FixUrlForSystem(const Url: string): string;
+var
+  T: string;
+begin
+  T := Trim(Url);
+  if HttpsUnsupported and (LowerCase(Copy(T, 1, 8)) = 'https://') then
+    Result := 'http://' + Copy(T, 9, MaxInt)
+  else
+    Result := T;
+end;
 
 function IsRemoteUrl(const S: string): Boolean;
 var
@@ -199,7 +224,7 @@ end;
 function FetchToFileUA(const Source, DestFile, UA: string; out ErrorMsg: string): Boolean;
 begin
   if IsRemoteUrl(Source) then
-    Result := HttpDownload(Trim(Source), DestFile, UA, ErrorMsg)
+    Result := HttpDownload(FixUrlForSystem(Source), DestFile, UA, ErrorMsg)
   else
     Result := CopyLocal(LocalPath(Source), DestFile, ErrorMsg);
   if Result and FileExists(DestFile) then
@@ -217,5 +242,37 @@ begin
     end;
   end;
 end;
+
+{$IFDEF WINDOWS}
+{ Windows 7 умеет TLS 1.2, но по умолчанию WinINet его не включает —
+  без этого многие сайты с https:// не открываются. Включаем для текущего
+  пользователя (то же, что галочка «Использовать TLS 1.2» в свойствах браузера). }
+procedure EnableModernTls;
+var
+  R: TRegistry;
+  V: Integer;
+begin
+  if not ((Win32MajorVersion = 6) and (Win32MinorVersion <= 1)) then Exit;
+  R := TRegistry.Create;
+  try
+    try
+      R.RootKey := HKEY_CURRENT_USER;
+      if R.OpenKey('Software\Microsoft\Windows\CurrentVersion\Internet Settings', True) then
+      begin
+        V := $A0;   { SSL 3.0 + TLS 1.0 — значение Windows 7 по умолчанию }
+        if R.ValueExists('SecureProtocols') then V := R.ReadInteger('SecureProtocols');
+        if (V and $800) = 0 then
+          R.WriteInteger('SecureProtocols', V or $200 or $800);   { + TLS 1.1 и TLS 1.2 }
+      end;
+    except
+    end;
+  finally
+    R.Free;
+  end;
+end;
+
+initialization
+  EnableModernTls;
+{$ENDIF}
 
 end.
