@@ -1468,6 +1468,12 @@ begin
     Log('совместимый вывод видео включён');
   end;
   FVlc := libvlc_new(N, @Args[0]);
+  if (FVlc = nil) and (N > 3) then
+  begin
+    { какой-то параметр этой версии VLC неизвестен — запускаем без него }
+    Log('libvlc_new с доп. параметрами не удался, повтор без них');
+    FVlc := libvlc_new(3, @Args[0]);
+  end;
   if FVlc = nil then
   begin
     FVlcError := 'Не удалось запустить видеодвижок VLC ' + VlcVersion;

@@ -12,7 +12,7 @@ unit softvideo;
 interface
 
 uses
-  Classes, SysUtils, Controls, ExtCtrls, Graphics, SyncObjs;
+  Classes, SysUtils, Controls, ExtCtrls, Graphics, GraphType, SyncObjs;
 
 type
   TSoftRenderer = class
@@ -21,6 +21,7 @@ type
     FBuf, FBack: array of Byte;     { FBuf — сюда пишет VLC, FBack — последний готовый кадр }
     FW, FH: Integer;
     FFresh: Boolean;
+    FRgbaOrder: Boolean;            { картинка в окне ждёт порядок байтов R,G,B (Linux) }
     FBox: TPaintBox;
     FTimer: TTimer;
     FFrameW, FFrameH: Integer;      { размер кадра, показанного в окне }
@@ -83,7 +84,11 @@ begin
   H := H and not 1;
   if W < 2 then W := 2;
   if H < 2 then H := 2;
-  Move(PAnsiChar('RV32')^, chroma^, 4);
+  { RV32 — байты B,G,R (как в Windows); RGBA — R,G,B (как обычно в Linux/GTK) }
+  if R.FRgbaOrder then
+    Move(PAnsiChar('RGBA')^, chroma^, 4)
+  else
+    Move(PAnsiChar('RV32')^, chroma^, 4);
   width^ := W;
   height^ := H;
   pitches^ := W * 4;
@@ -149,6 +154,14 @@ begin
   FTimer.Interval := 20;
   FTimer.OnTimer := @TimerTick;
   FTimer.Enabled := False;
+  {$IFNDEF WINDOWS}
+  { узнаём, в каком порядке цвета хранятся в картинке этой системы }
+  FBmp := TBitmap.Create;
+  FBmp.PixelFormat := pf32bit;
+  FBmp.SetSize(2, 2);
+  FRgbaOrder := (FBmp.RawImage.Description.RedShift = 0) and
+    (FBmp.RawImage.Description.ByteOrder = riboLSBFirst);
+  {$ENDIF}
 end;
 
 destructor TSoftRenderer.Destroy;
