@@ -220,5 +220,24 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*
           generate_release_notes: true
+
+      # файлы релиза с понятными названиями: «IPTV Aristocrat (Windows XP)» и т. д.
+      - name: Файлы релиза
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cd artifacts
+          ls -la
+          up() {
+            f=$(ls $1 2>/dev/null | head -1)
+            if [ -n "$f" ]; then gh release upload "$TAG" "$f#$2" --clobber -R "$GITHUB_REPOSITORY"; else echo "нет файла $1"; fi
+          }
+          up "*-windows-xp-setup.exe"   "IPTV Aristocrat (Windows XP)"
+          up "*-windows-xp.zip"         "IPTV Aristocrat (Windows XP, без установки)"
+          up "*-windows-setup.exe"      "IPTV Aristocrat (Windows 7 и новее)"
+          up "*-windows-win7plus.zip"   "IPTV Aristocrat (Windows 7 и новее, без установки)"
+          up "*.deb"                    "IPTV Aristocrat (Linux DEB)"
+          up "*.rpm"                    "IPTV Aristocrat (Linux RPM)"
+          up "*.AppImage"               "IPTV Aristocrat (Linux AppImage)"
