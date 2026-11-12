@@ -17,7 +17,7 @@ uses
 type
   TSoftRenderer = class
   private
-    FLock: TCriticalSection;
+    FLock: SyncObjs.TCriticalSection;
     FBuf, FBack: array of Byte;     { FBuf — сюда пишет VLC, FBack — последний готовый кадр }
     FW, FH: Integer;
     FFresh: Boolean;
@@ -138,7 +138,7 @@ end;
 constructor TSoftRenderer.Create(Host: TWinControl; DblClick: TNotifyEvent);
 begin
   inherited Create;
-  FLock := TCriticalSection.Create;
+  FLock := SyncObjs.TCriticalSection.Create;
   FBox := TPaintBox.Create(Host);
   FBox.Parent := Host;
   FBox.Align := alClient;
